@@ -49,11 +49,6 @@
 <script>
   // Zoom levels 0–7 (per your gdal2tiles command)
   const MAX_ZOOM = 7;
-
-  // You produced PNG tiles and used --xyz (not TMS)
-  const TILE_URL = './tiles/{z}/{x}/{y}.png';
-
-  // Initialize map using simple pixel coordinate system
   const map = L.map('map', {
     crs: L.CRS.Simple,
     minZoom: 0,
@@ -65,7 +60,7 @@
   });
 
   // Add base tiles
-  L.tileLayer(TILE_URL, {
+  L.tileLayer('tiles/{z}/{x}/{y}.png', {
     tileSize: 256,
     minZoom: 0,
     maxZoom: MAX_ZOOM,
@@ -74,7 +69,7 @@
     keepBuffer: 2
   }).addTo(map);
 
-  map.flyTo([-56, 128], 2, {        // <- immediately fly to your target
+  map.flyTo([-56, 128], 2, {
     animate: true,
     duration: 1.5,
     easeLinearity: 0.25
