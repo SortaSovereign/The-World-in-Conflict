@@ -49,6 +49,11 @@
 <script>
   // Zoom levels 0–7 (per your gdal2tiles command)
   const MAX_ZOOM = 7;
+
+  // You produced PNG tiles and used --xyz (not TMS)
+  const TILE_URL = './tiles/{z}/{x}/{y}.png';
+
+  // Initialize map using simple pixel coordinate system
   const map = L.map('map', {
     crs: L.CRS.Simple,
     minZoom: 0,
@@ -59,13 +64,8 @@
     zoomAnimation: true
   });
 
- const mapEl = map.getContainer();
-  mapEl.setAttribute('tabindex', '0');
-  // Focus after a tick to ensure DOM is ready
-  setTimeout(() => mapEl.focus(), 0);
-  
   // Add base tiles
-  L.tileLayer('tiles/{z}/{x}/{y}.png', {
+  L.tileLayer(TILE_URL, {
     tileSize: 256,
     minZoom: 0,
     maxZoom: MAX_ZOOM,
@@ -74,7 +74,7 @@
     keepBuffer: 2
   }).addTo(map);
 
-  map.flyTo([-56, 128], 2, {
+  map.flyTo([-56, 128], 2, {        // <- immediately fly to your target
     animate: true,
     duration: 1.5,
     easeLinearity: 0.25
@@ -83,18 +83,32 @@
 // ===========================================================================
 // MODULE 1: Coordinates HUD (live X/Y + zoom + custom scale)
 // ===========================================================================
-  const hud = document.getElementById('twicHud');
-  function renderHUD(e) {
-    const z = map.getZoom();
-    const p = e?.latlng ?? map.getCenter();
-    hud.textContent = `X,Y: ${p.lng.toFixed(0)}, ${p.lat.toFixed(0)} | Zoom: ${z} | 1 px = 0.25 km`;
+
+ const UNITS_PER_PIXEL = 30;
+ const UNIT_NAME = 'km';
+
+ function addCoordinateHUD(map, opts={}) {
+    const hud = document.getElementById(opts.elId || 'twicHud');
+    const unitsPerPixel = opts.unitsPerPixel ?? null;
+    const unitName = opts.unitName ?? 'units';
+
+    function render(e) {
+      const z = map.getZoom();
+      const p = e && e.latlng ? e.latlng : map.getCenter();
+      const xy = `X,Y: ${p.lng.toFixed(0)}, ${p.lat.toFixed(0)}`;
+      const zoom = `Zoom: ${z}`;
+      const scale = (unitsPerPixel != null) ? ` | 1 px = ${unitsPerPixel} ${unitName}` : '';
+      hud.textContent = `${xy} | ${zoom}${scale}`;
+    }
+    map.on('mousemove zoomend moveend', render);
+    render();
   }
-  map.on('mousemove zoomend moveend', renderHUD);
-  renderHUD();
+  addCoordinateHUD(map, { unitsPerPixel: UNITS_PER_PIXEL, unitName: UNIT_NAME });
   
 // ===========================================================================
 // MODULE 4: Measurement Tool (click-to-measure, Esc to cancel)
 // ===========================================================================
+
   function addMeasureTool(map, options={}) {
     const unitsPerPixel = options.unitsPerPixel ?? 1;
     const unitName = options.unitName ?? 'units';
