@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>The World in Conflict — Base Tiles</title>
+  <title>The World in Conflict â€” Base Tiles</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     html, body, #map { height: 100%; margin: 0; background: #0f112f; }
@@ -40,14 +40,14 @@
 </head>
 <body>
 <div id="map"></div>
-  <div class="twic-hud" id="twicHud">X,Y: —, — | Zoom: — | 1 px = —</div>
+  <div class="twic-hud" id="twicHud">X,Y: â€”, â€” | Zoom: â€” | 1 px = â€”</div>
   <div class="twic-toolbar">
-    <button class="twic-btn" id="measureBtn" title="Click start → click end → Esc to cancel">Measure</button>
+    <button class="twic-btn" id="measureBtn" title="Click start â†’ click end â†’ Esc to cancel">Measure</button>
     <button class="twic-btn" id="clearBtn">Clear</button>
   </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-  // Zoom levels 0–7 (per your gdal2tiles command)
+  // Zoom levels 0â€“7 (per your gdal2tiles command)
   const MAX_ZOOM = 7;
 
   // You produced PNG tiles and used --xyz (not TMS)
@@ -108,7 +108,6 @@
 // ===========================================================================
 // MODULE 4: Measurement Tool (click-to-measure, Esc to cancel)
 // ===========================================================================
-
   function addMeasureTool(map, options={}) {
     const unitsPerPixel = options.unitsPerPixel ?? 1;
     const unitName = options.unitName ?? 'units';
