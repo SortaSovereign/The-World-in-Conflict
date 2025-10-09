@@ -59,6 +59,11 @@
     zoomAnimation: true
   });
 
+ const mapEl = map.getContainer();
+  mapEl.setAttribute('tabindex', '0');
+  // Focus after a tick to ensure DOM is ready
+  setTimeout(() => mapEl.focus(), 0);
+  
   // Add base tiles
   L.tileLayer('tiles/{z}/{x}/{y}.png', {
     tileSize: 256,
@@ -78,27 +83,14 @@
 // ===========================================================================
 // MODULE 1: Coordinates HUD (live X/Y + zoom + custom scale)
 // ===========================================================================
-
- const UNITS_PER_PIXEL = 30;
- const UNIT_NAME = 'km';
-
- function addCoordinateHUD(map, opts={}) {
-    const hud = document.getElementById(opts.elId || 'twicHud');
-    const unitsPerPixel = opts.unitsPerPixel ?? null;
-    const unitName = opts.unitName ?? 'units';
-
-    function render(e) {
-      const z = map.getZoom();
-      const p = e && e.latlng ? e.latlng : map.getCenter();
-      const xy = `X,Y: ${p.lng.toFixed(0)}, ${p.lat.toFixed(0)}`;
-      const zoom = `Zoom: ${z}`;
-      const scale = (unitsPerPixel != null) ? ` | 1 px = ${unitsPerPixel} ${unitName}` : '';
-      hud.textContent = `${xy} | ${zoom}${scale}`;
-    }
-    map.on('mousemove zoomend moveend', render);
-    render();
+  const hud = document.getElementById('twicHud');
+  function renderHUD(e) {
+    const z = map.getZoom();
+    const p = e?.latlng ?? map.getCenter();
+    hud.textContent = `X,Y: ${p.lng.toFixed(0)}, ${p.lat.toFixed(0)} | Zoom: ${z} | 1 px = 0.25 km`;
   }
-  addCoordinateHUD(map, { unitsPerPixel: UNITS_PER_PIXEL, unitName: UNIT_NAME });
+  map.on('mousemove zoomend moveend', renderHUD);
+  renderHUD();
   
 // ===========================================================================
 // MODULE 4: Measurement Tool (click-to-measure, Esc to cancel)
