@@ -1,33 +1,26 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>The World in Conflict — Base Tiles</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>The World in Conflict — Map Editor</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
   <style>
-    html, body, #map { height: 100%; margin: 0; background: #0f112f; }
+    html, body, #map { height:100%; margin:0; background:#0f112f; }
+
+    /* HUD, badges, toolbar */
     .twic-hud {
       position:absolute; left:8px; bottom:8px; z-index:1000;
       background:#ffffffd9; padding:6px 10px; border-radius:8px;
       font:12px/1.2 system-ui,sans-serif; box-shadow:0 2px 8px rgba(0,0,0,.15);
     }
-
-    /* Region label style */
-    .twic-label {
-      font:600 12px/1.2 system-ui,sans-serif; color:#111; background:#fff;
-      border:1px solid #e5e7eb; border-radius:6px; padding:3px 6px;
-      box-shadow:0 1px 6px rgba(0,0,0,.15);
-    }
-
-    /* Measurement label badges */
     .twic-badge {
       font:600 12px/1.2 system-ui,sans-serif; color:#111; background:#fff;
       border:1px solid #e5e7eb; border-radius:6px; padding:3px 6px;
       box-shadow:0 1px 6px rgba(0,0,0,.15);
     }
-
-    /* Simple toolbar for measure controls */
     .twic-toolbar {
       position:absolute; right:8px; top:8px; z-index:1000; display:flex; gap:6px;
     }
@@ -36,143 +29,474 @@
       font:12px system-ui; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,.1);
     }
     .twic-btn.active { background:#111827; color:#fff; border-color:#111827; }
+
+    /* Overlay tool panel */
+    .twic-panel {
+      position:absolute; right:8px; top:60px; z-index:1000;
+      width:300px; background:#ffffffee; border:1px solid #e5e7eb; border-radius:12px;
+      padding:10px; font:12px system-ui,sans-serif; box-shadow:0 8px 24px rgba(0,0,0,.15);
+    }
+    .twic-panel h3 { margin:0 0 8px; font-size:13px }
+    .twic-row { display:flex; gap:8px; margin-bottom:8px; align-items:center }
+    .twic-row label { min-width:84px }
+    .twic-row input, .twic-row select {
+      flex:1; padding:6px 8px; border:1px solid #e5e7eb; border-radius:8px;
+    }
+    .twic-muted { color:#6b7280; font-size:11px; margin-top:4px }
+    .twic-text {
+      background:#fff; border:1px solid #e5e7eb; border-radius:6px; padding:3px 6px;
+      color:#111; font:600 12px/1.2 system-ui,sans-serif; white-space:pre-wrap;
+    }
   </style>
 </head>
 <body>
-<div id="map"></div>
+
+  <!-- Focusable map (so Esc/Delete work on GitHub Pages) -->
+  <div id="map" tabindex="0"></div>
+
+  <!-- HUD + measurement toolbar -->
   <div class="twic-hud" id="twicHud">X,Y: —, — | Zoom: — | 1 px = —</div>
   <div class="twic-toolbar">
-    <button class="twic-btn" id="measureBtn" title="Click start → click end → Esc to cancel">Measure</button>
+    <button class="twic-btn" id="measureBtn">Measure</button>
     <button class="twic-btn" id="clearBtn">Clear</button>
   </div>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
-  // Zoom levels 0–7 (per your gdal2tiles command)
-  const MAX_ZOOM = 7;
 
-  // You produced PNG tiles and used --xyz (not TMS)
+  <!-- Overlay (text + NATO icons) panel -->
+  <div class="twic-panel">
+    <h3>Overlay Tools</h3>
+
+    <div class="twic-row">
+      <label>Mode</label>
+      <select id="toolMode">
+        <option value="select">Select / Move</option>
+        <option value="text">Add Text</option>
+        <option value="nato">Add NATO Icon</option>
+      </select>
+    </div>
+
+    <!-- Text box options -->
+    <div id="textOpts">
+      <div class="twic-row"><label>Text</label><input id="txtText" type="text" placeholder="Label…"/></div>
+      <div class="twic-row">
+        <label>Size</label><input id="txtSize" type="number" value="12" min="8" max="48"/>
+        <label>Color</label><input id="txtColor" type="color" value="#111111"/>
+      </div>
+      <div class="twic-row">
+        <label>BG</label><input id="txtBg" type="color" value="#ffffff"/>
+        <label>Border</label><input id="txtBorder" type="color" value="#e5e7eb"/>
+      </div>
+      <div class="twic-muted">Click map to place a text box.</div>
+    </div>
+
+    <!-- Simplified NATO options -->
+    <div id="natoOpts" style="display:none">
+      <div class="twic-row">
+        <label>Domain</label>
+        <select id="natoDomain">
+          <option value="A">Air</option>
+          <option value="S">Surface</option>
+          <option value="G">Ground</option>
+          <option value="U">Subsurface</option>
+        </select>
+      </div>
+      <div class="twic-row">
+        <label>Affil.</label>
+        <select id="natoAff">
+          <option value="F">Friendly</option>
+          <option value="H">Hostile</option>
+          <option value="N">Neutral</option>
+        </select>
+        <label>Size</label><input id="natoSize" type="number" value="36" min="16" max="96"/>
+      </div>
+      <div class="twic-muted">Click map to place a NATO symbol.</div>
+    </div>
+
+    <!-- Share + overlay actions -->
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <button class="twic-btn" id="btnShare" title="Encode overlays into the URL">Share link</button>
+      <button class="twic-btn" id="btnDelete">Delete Selected</button>
+      <button class="twic-btn" id="btnOverlayClear">Clear All</button>
+    </div>
+    <div class="twic-muted" style="margin-top:6px">
+      Shared state: uses URL hash if present; otherwise loads <code>overlays.geojson</code> (if in repo).
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- milsymbol UMD (use jsDelivr for correct MIME on Pages) -->
+  <script src="https://cdn.jsdelivr.net/npm/milsymbol@3.0.3/dist/milsymbol.min.js"></script>
+  <!-- LZ-String for shareable URL compression -->
+  <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+  /* ===== Base map (PNG + XYZ tiles z=0..7) ===== */
+  const MAX_ZOOM = 7;
   const TILE_URL = './tiles/{z}/{x}/{y}.png';
 
-  // Initialize map using simple pixel coordinate system
   const map = L.map('map', {
     crs: L.CRS.Simple,
     minZoom: 0,
     maxZoom: MAX_ZOOM,
     zoom: 0,
-    center: [-56, 128],
+    center: [-56,128],
     updateWhenIdle: true,
-    zoomAnimation: true
+    zoomAnimation: true,
+    keyboard: true
   });
+  const mapEl = map.getContainer();
+  setTimeout(() => mapEl.focus(), 0);
 
-  // Add base tiles
   L.tileLayer(TILE_URL, {
     tileSize: 256,
     minZoom: 0,
     maxZoom: MAX_ZOOM,
     noWrap: true,
+    tms: false,           // you used --xyz with gdal2tiles
     detectRetina: true,
     keepBuffer: 2
   }).addTo(map);
 
-  map.flyTo([-56, 128], 2, {        // <- immediately fly to your target
-    animate: true,
-    duration: 1.5,
-    easeLinearity: 0.25
-  })
+  map.flyTo([-56,128], 2, { animate:true, duration:1.2 });
 
-// ===========================================================================
-// MODULE 1: Coordinates HUD (live X/Y + zoom + custom scale)
-// ===========================================================================
-
- const UNITS_PER_PIXEL = 30;
- const UNIT_NAME = 'km';
-
- function addCoordinateHUD(map, opts={}) {
-    const hud = document.getElementById(opts.elId || 'twicHud');
-    const unitsPerPixel = opts.unitsPerPixel ?? null;
-    const unitName = opts.unitName ?? 'units';
-
-    function render(e) {
+  /* ===== Coordinate HUD ===== */
+  const UNITS_PER_PIXEL = 30, UNIT_NAME = 'km';
+  (function addCoordinateHUD(){
+    const hud = document.getElementById('twicHud');
+    function render(e){
       const z = map.getZoom();
-      const p = e && e.latlng ? e.latlng : map.getCenter();
-      const xy = `X,Y: ${p.lng.toFixed(0)}, ${p.lat.toFixed(0)}`;
-      const zoom = `Zoom: ${z}`;
-      const scale = (unitsPerPixel != null) ? ` | 1 px = ${unitsPerPixel} ${unitName}` : '';
-      hud.textContent = `${xy} | ${zoom}${scale}`;
+      const p = e?.latlng ?? map.getCenter();
+      hud.textContent = `X,Y: ${p.lng.toFixed(0)}, ${p.lat.toFixed(0)} | Zoom: ${z} | 1 px = ${UNITS_PER_PIXEL} ${UNIT_NAME}`;
     }
     map.on('mousemove zoomend moveend', render);
     render();
-  }
-  addCoordinateHUD(map, { unitsPerPixel: UNITS_PER_PIXEL, unitName: UNIT_NAME });
-  
-// ===========================================================================
-// MODULE 4: Measurement Tool (click-to-measure, Esc to cancel)
-// ===========================================================================
-  function addMeasureTool(map, options={}) {
-    const unitsPerPixel = options.unitsPerPixel ?? 1;
-    const unitName = options.unitName ?? 'units';
-    const lineStyle  = Object.assign({ color:'#111827', weight:3 }, options.lineStyle||{});
-    const guideStyle = Object.assign({ color:'#111827', weight:2, dashArray:'5,4' }, options.guideStyle||{});
+  })();
 
-    let active = false, start = null, guide = null;
+  /* ===== Measurement tool ===== */
+  (function addMeasureTool(){
+    let active=false, start=null, guide=null;
     const group = L.layerGroup().addTo(map);
+    function pxDist(a,b){ return Math.hypot(b.lng-a.lng, b.lat-a.lat); }
+    function fmt(px){ return (px*UNITS_PER_PIXEL).toFixed(2)+' '+UNIT_NAME; }
 
-    function pxDist(a, b) {
-      const dx = b.lng - a.lng, dy = b.lat - a.lat;
-      return Math.hypot(dx, dy);
-    }
-    function fmt(px) {
-      const v = px * unitsPerPixel;
-      if (unitName === 'm' && v >= 1000) return (v/1000).toFixed(2) + ' km';
-      return v.toFixed(2) + ' ' + unitName;
-    }
-    function begin() {
-      active = true; start = null;
-      map.getContainer().style.cursor = 'crosshair';
-    }
-    function cancel() {
-      active = false; start = null;
-      if (guide) { map.removeLayer(guide); guide = null; }
-      map.getContainer().style.cursor = '';
-    }
-    function clearAll() {
-      group.clearLayers(); cancel();
-    }
+    function begin(){ active=true; start=null; mapEl.style.cursor='crosshair'; mapEl.focus(); }
+    function cancel(){ active=false; start=null; if(guide){ map.removeLayer(guide); guide=null; } mapEl.style.cursor=''; }
+    function clearAll(){ group.clearLayers(); cancel(); }
 
     map.on('click', e => {
-      if (!active) return;
-      if (!start) {
+      if(!active) return;
+      if(!start){
         start = e.latlng;
-        guide = L.polyline([start,start], guideStyle).addTo(map);
+        guide = L.polyline([start,start], { color:'#111827', weight:2, dashArray:'5,4' }).addTo(map);
       } else {
         const end = e.latlng;
-        const dpx = pxDist(start, end);
-        L.polyline([start,end], lineStyle).addTo(group);
+        L.polyline([start,end], { color:'#111827', weight:3 }).addTo(group);
         const mid = L.latLng((start.lat+end.lat)/2, (start.lng+end.lng)/2);
         L.marker(mid, {
-          icon: L.divIcon({ className:'twic-badge', html: fmt(dpx), iconSize:null }),
-          interactive:false
+          icon: L.divIcon({ className:'twic-badge', html: fmt(pxDist(start,end)), iconSize: null }),
+          interactive: false
         }).addTo(group);
         cancel();
       }
     });
-    map.on('mousemove', e => { if (active && guide && start) guide.setLatLngs([start, e.latlng]); });
-    map.on('keydown', e => { if (e.originalEvent.key === 'Escape') cancel(); });
+    map.on('mousemove', e => { if(active && guide && start) guide.setLatLngs([start, e.latlng]); });
+    document.addEventListener('keydown', e => { if(e.key === 'Escape') cancel(); });
 
-    return { start: begin, cancel, clear: clearAll, layer: group };
+    // Buttons
+    const measureBtn = document.getElementById('measureBtn');
+    const clearBtn   = document.getElementById('clearBtn');
+    measureBtn.onclick = () => { measureBtn.classList.add('active'); begin(); };
+    clearBtn.onclick   = () => { measureBtn.classList.remove('active'); clearAll(); };
+  })();
+
+  /* ===== Overlay: text + simplified NATO symbols (frame/fill only) ===== */
+  const overlayLayer = L.layerGroup().addTo(map);
+  let selected = null;
+  function clearSelection(){ if(selected && selected._icon) selected._icon.style.outline=''; selected=null; }
+  function selectLayer(l){ clearSelection(); selected=l; if(l._icon) l._icon.style.outline='2px solid #111827'; }
+
+  const toolMode = document.getElementById('toolMode');
+  const textOpts = document.getElementById('textOpts');
+  const natoOpts = document.getElementById('natoOpts');
+  toolMode.addEventListener('change', () => {
+    textOpts.style.display = (toolMode.value === 'text') ? '' : 'none';
+    natoOpts.style.display = (toolMode.value === 'nato') ? '' : 'none';
+  });
+
+  /* Text boxes */
+  function makeTextDivIcon(t, s=12, c='#111', bg='#fff', bo='#e5e7eb'){
+    const html = `<div class="twic-text" style="font-size:${s}px;color:${c};background:${bg};border-color:${bo};">${t.replace(/</g,'&lt;')}</div>`;
+    return L.divIcon({ className:'', html, iconSize:null });
+  }
+  function addTextAt(p){
+    const t = txtText.value || 'Label';
+    const s = +txtSize.value || 12;
+    const c = txtColor.value;
+    const bg= txtBg.value;
+    const b = txtBorder.value;
+    const m = L.marker(p, { icon: makeTextDivIcon(t,s,c,bg,b), draggable:true }).addTo(overlayLayer);
+    m.on('click', e => { selectLayer(m); e.originalEvent.stopPropagation(); });
+    m.on('dragstart', clearSelection);
   }
 
-  // Wire up the measure tool to the buttons
-  const measure = addMeasureTool(map, { unitsPerPixel: UNITS_PER_PIXEL, unitName: UNIT_NAME });
-  document.getElementById('measureBtn').onclick = function() {
-    this.classList.add('active');
-    measure.start();
+  /* NATO symbol mapping (Air/Surface/Ground/Subsurface × Friendly/Hostile/Neutral) */
+  const SIDC_MAP = {
+    // Ground (unit – Infantry, Present)
+    G: { base:"SUG-UCI----D", F:"SFG-UCI----D", H:"SHG-UCI----D", N:"SNG-UCI----D" },
+    // Air (track – generic aircraft)
+    A: { base:"SUAPMFQA----", F:"SFAPMFQA----", H:"SHAPMFQA----", N:"SNAPMFQA----" },
+    // Surface (sea surface track – generic ship)
+    S: { base:"SUSPMFQA----", F:"SFSPMFQA----", H:"SHSPMFQA----", N:"SNSPMFQA----" },
+    // Subsurface (submarine track)
+    U: { base:"SUUPMFQA----", F:"SFUPMFQA----", H:"SHUPMFQA----", N:"SNUPMFQA----" }
   };
-  document.getElementById('clearBtn').onclick = function() {
-    document.getElementById('measureBtn').classList.remove('active');
-    measure.clear();
-  };
+  function getSidc(domain, aff){
+    const cat = SIDC_MAP[domain];
+    if(!cat) return null;
+    if(cat[aff]) return cat[aff];
+    const b = cat.base;
+    return aff + b.slice(1); // swap affiliation letter
+  }
+  function makeNatoIcon(domain, aff, size=36){
+    try{
+      const sidc = getSidc(domain, aff);
+      if(!sidc) throw new Error(`Unknown domain ${domain}`);
+      if(!window.ms || !ms.Symbol) throw new Error('milsymbol not loaded');
+      // Frame/background only (no center pictogram)
+      const sym = new ms.Symbol(sidc, {
+        size,
+        icon: false,
+        fill: true,
+        frame: true,
+        outlineWidth: size*0.06
+      });
+      const url = sym.asCanvas().toDataURL();
+      return L.icon({ iconUrl:url, iconSize:[size,size] });
+    }catch(err){
+      console.error('NATO render failed:', err);
+      return L.divIcon({
+        className:'',
+        html:`<div style="width:${size/3}px;height:${size/3}px;border-radius:50%;background:#111"></div>`,
+        iconSize:[size/3,size/3]
+      });
+    }
+  }
+  function addNatoAt(p){
+    const d = natoDomain.value;   // A/S/G/U
+    const a = natoAff.value;      // F/H/N
+    const s = +natoSize.value || 36;
+    const m = L.marker(p, { icon: makeNatoIcon(d,a,s), draggable:true }).addTo(overlayLayer);
+    m.options.meta = { kind:'nato', domain:d, aff:a, size:s };
+    m.on('click', e => { selectLayer(m); e.originalEvent.stopPropagation(); });
+    m.on('dragstart', clearSelection);
+  }
 
+  map.on('click', e => {
+    if (toolMode.value === 'text') addTextAt(e.latlng);
+    else if (toolMode.value === 'nato') addNatoAt(e.latlng);
+    else clearSelection();
+  });
+
+  document.getElementById('btnDelete').onclick = () => { if (selected) { overlayLayer.removeLayer(selected); selected=null; } };
+  document.getElementById('btnOverlayClear').onclick = () => { overlayLayer.clearLayers(); selected=null; };
+  mapEl.addEventListener('keydown', e => {
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
+      overlayLayer.removeLayer(selected); selected=null;
+    }
+  });
+
+  /* ===== Shared overlays: share-link (URL hash) + repo file fallback ===== */
+
+
+  function overlaysToFeatureCollection() {
+    const feats = [];
+    overlayLayer.eachLayer(layer => {
+      if (!layer.getLatLng) return;
+      const p = layer.getLatLng();
+      let props = { kind:'unknown' };
+
+
+      if (layer.options.icon && typeof layer.options.icon.options.html === 'string') {
+        const div = document.createElement('div');
+        div.innerHTML = layer.options.icon.options.html;
+        const el = div.firstChild;
+        const style = el.getAttribute('style') || '';
+        props = {
+          kind:  'text',
+          text:  el.textContent || '',
+          size:  +(style.match(/font-size:(\d+)px/)?.[1] || 12),
+          color: (style.match(/color:\s*([^;]+)/)?.[1] || '#111'),
+          bg:    (style.match(/background:\s*([^;]+)/)?.[1] || '#fff'),
+          border:(style.match(/border-color:\s*([^;]+)/)?.[1] || '#e5e7eb')
+        };
+      }
+
+      if (layer.options.meta?.kind === 'nato') {
+        props = {
+          kind:   'nato',
+          domain: layer.options.meta.domain, // A/S/G/U
+          aff:    layer.options.meta.aff,    // F/H/N
+          size:   layer.options.meta.size
+        };
+      }
+
+      feats.push({
+        type:'Feature',
+        geometry:{ type:'Point', coordinates:[p.lng, p.lat] },
+        properties: props
+      });
+    });
+    return { type:'FeatureCollection', features:feats };
+  }
+
+  function featureCollectionToOverlays(gj) {
+    overlayLayer.clearLayers(); selected = null;
+    (gj.features || []).forEach(f => {
+      if (f.geometry?.type !== 'Point') return;
+      const [x,y] = f.geometry.coordinates;
+      const p = L.latLng(y,x);
+      const k = f.properties?.kind;
+
+      if (k === 'text') {
+        const { text='', size=12, color='#111', bg='#fff', border='#e5e7eb' } = f.properties || {};
+        const mk = L.marker(p, { icon: makeTextDivIcon(text,size,color,bg,border), draggable:true }).addTo(overlayLayer);
+        mk.on('click', e => { selectLayer(mk); e.originalEvent.stopPropagation(); });
+        mk.on('dragstart', clearSelection);
+        return;
+      }
+      if (k === 'nato') {
+        const { domain='G', aff='F', size=36 } = f.properties || {};
+        const mk = L.marker(p, { icon: makeNatoIcon(domain,aff,size), draggable:true }).addTo(overlayLayer);
+        mk.options.meta = { kind:'nato', domain, aff, size };
+        mk.on('click', e => { selectLayer(mk); e.originalEvent.stopPropagation(); });
+        mk.on('dragstart', clearSelection);
+        return;
+      }
+    });
+  }
+
+  // --- Share link (hash) helpers: #s=<compressed>
+  function setHashFromOverlays() {
+    const fc = overlaysToFeatureCollection();
+    const json = JSON.stringify(fc);
+    const packed = LZString.compressToEncodedURIComponent(json);
+    location.hash = 's=' + packed;
+  }
+  function tryLoadFromHash() {
+    const h = new URL(location.href).hash.slice(1);
+    if (!h.startsWith('s=')) return false;
+    try {
+      const packed = h.substring(2);
+      const json = LZString.decompressFromEncodedURIComponent(packed);
+      if (!json) return false;
+      const fc = JSON.parse(json);
+      featureCollectionToOverlays(fc);
+      return true;
+    } catch { return false; }
+  }
+
+  // --- Repo file fallback: overlays.geojson at repo root
+  async function tryLoadFromRepoFile() {
+    try {
+      const res = await fetch('./overlays.geojson', { cache:'no-cache' });
+      if (!res.ok) return false;
+      const gj = await res.json();
+      featureCollectionToOverlays(gj);
+      return true;
+    } catch { return false; }
+  }
+
+  // Bootstrap: prefer URL hash state; else fall back to repo file
+  (async function bootstrapOverlays(){
+    const loadedFromHash = tryLoadFromHash();
+    if (!loadedFromHash) await tryLoadFromRepoFile();
+  })();
+
+  // Wire the Share button
+  document.getElementById('btnShare').addEventListener('click', () => {
+    setHashFromOverlays();
+    navigator.clipboard?.writeText(location.href).catch(()=>{});
+    alert('Shareable link updated in the address bar (copied to clipboard if permitted).');
+  });
+  </script>
+<script>
+
+const SUPABASE_URL = 'https://pzezmofpgtzofpveucmz.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6ZXptb2ZwZ3R6b2ZwdmV1Y216Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAzNTc5NDYsImV4cCI6MjA3NTkzMzk0Nn0.DZLlxcrYgW5iTIpG-YAeRCwYGXCghN_aNWBigjnx3cI';
+const ROOM_ID = 'public';  // use any string; all visitors share this document
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+</script>
+
+let _saving = false;
+
+async function loadFromSupabase() {
+  const { data, error } = await sb
+    .from('overlays')
+    .select('data, updated_at')
+    .eq('id', ROOM_ID)
+    .single();
+
+  if (error) { console.warn('Supabase load error:', error.message); return false; }
+  if (data?.data) {
+    featureCollectionToOverlays(data.data);
+    return true;
+  }
+  return false;
+}
+
+const saveOverlays = debounce(async () => {
+  const fc = overlaysToFeatureCollection();
+  _saving = true;
+  const { error } = await sb
+    .from('overlays')
+    .upsert({ id: ROOM_ID, data: fc })
+    .eq('id', ROOM_ID);
+  if (error) console.warn('Supabase save error:', error.message);
+
+  setTimeout(() => { _saving = false; }, 300);
+}, 350);
+
+const channel = sb
+  .channel('overlays-listen')
+  .on(
+    'postgres_changes',
+    { event: '*', schema: 'public', table: 'overlays', filter: `id=eq.${ROOM_ID}` },
+    (payload) => {
+      if (_saving) return; // ignore our own save
+      const next = (payload.new && payload.new.data) || null;
+      if (!next) return;
+      featureCollectionToOverlays(next);
+    }
+  )
+  .subscribe();
+
+/* Hook saves to your existing UI events */
+function hookOverlaySaves() {
+  // When a layer is added/removed
+  overlayLayer.on('layeradd', saveOverlays);
+  overlayLayer.on('layerremove', saveOverlays);
+
+
+  overlayLayer.eachLayer(l => { if (l.dragging) l.on('dragend', saveOverlays); });
+  overlayLayer.on('layeradd', l => { if (l.layer?.dragging) l.layer.on('dragend', saveOverlays); });
+
+function debounce(fn, wait=300){
+  let t; return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args), wait); };
+}
+
+(async function bootstrapCollab(){
+  const loadedFromHash = (function(){
+    try { return tryLoadFromHash(); } catch { return false; }
+  })();
+  if (!loadedFromHash) {
+    const loadedFromRepo = await (async () => { try { return await tryLoadFromRepoFile(); } catch { return false; } })();
+    if (!loadedFromRepo) {
+      await loadFromSupabase(); // finally, shared doc
+    }
+  }
+  hookOverlaySaves();
+})();
 </script>
 </body>
 </html>
