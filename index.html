@@ -206,6 +206,7 @@
 
   /* ===== Measurement tool ===== */
   let measurementActive = false;
+  let measurementHandlePoint = null;
   (function addMeasureTool(){
     let active=false, start=null, guide=null;
     const group = L.layerGroup().addTo(map);
@@ -253,6 +254,25 @@
       if(disable) disableMapInteractions(); else restoreMapInteractions();
     }
 
+    function handlePoint(latlng){
+      if(!active) return;
+      if(!start){
+        start = latlng;
+        guide = L.polyline([start,start], { color:'#111827', weight:2, dashArray:'5,4' }).addTo(map);
+      } else {
+        const end = latlng;
+        L.polyline([start,end], { color:'#111827', weight:3 }).addTo(group);
+        const mid = L.latLng((start.lat+end.lat)/2, (start.lng+end.lng)/2);
+        L.marker(mid, {
+          icon: L.divIcon({ className:'twic-badge', html: fmt(pxDist(start,end)), iconSize: null }),
+          interactive: false
+        }).addTo(group);
+        cancel();
+      }
+    }
+
+    measurementHandlePoint = handlePoint;
+
     function begin(){
       active=true; start=null; measurementActive = true; syncOverlayInteractivity();
       resetManeuverDraft();
@@ -266,22 +286,7 @@
     }
     function clearAll(){ group.clearLayers(); cancel(); }
 
-    map.on('click', e => {
-      if(!active) return;
-      if(!start){
-        start = e.latlng;
-        guide = L.polyline([start,start], { color:'#111827', weight:2, dashArray:'5,4' }).addTo(map);
-      } else {
-        const end = e.latlng;
-        L.polyline([start,end], { color:'#111827', weight:3 }).addTo(group);
-        const mid = L.latLng((start.lat+end.lat)/2, (start.lng+end.lng)/2);
-        L.marker(mid, {
-          icon: L.divIcon({ className:'twic-badge', html: fmt(pxDist(start,end)), iconSize: null }),
-          interactive: false
-        }).addTo(group);
-        cancel();
-      }
-    });
+    map.on('click', e => { handlePoint(e.latlng); });
     map.on('mousemove', e => { if(active && guide && start) guide.setLatLngs([start, e.latlng]); });
     document.addEventListener('keydown', e => { if(e.key === 'Escape') cancel(); });
 
@@ -438,7 +443,11 @@
   }
   function attachSelectablePath(layer){
     layer.on('click', e => {
-      if(measurementActive){ return; }
+      if(measurementActive){
+        measurementHandlePoint?.(e.latlng);
+        e.originalEvent?.stopPropagation?.();
+        return;
+      }
       selectLayer(layer);
       e.originalEvent.stopPropagation();
     });
@@ -485,7 +494,11 @@
     const b = txtBorder.value;
     const m = L.marker(p, { icon: makeTextDivIcon(t,s,c,bg,b), draggable:true }).addTo(overlayLayer);
     m.on('click', e => {
-      if(measurementActive){ return; }
+      if(measurementActive){
+        measurementHandlePoint?.(e.latlng);
+        e.originalEvent?.stopPropagation?.();
+        return;
+      }
       selectLayer(m); e.originalEvent.stopPropagation();
     });
     m.on('dragstart', clearSelection);
@@ -542,7 +555,11 @@
     m.options.meta = { kind:'nato', domain:d, aff:a, size:s, id };
     m.addTo(overlayLayer);
     m.on('click', e => {
-      if(measurementActive){ return; }
+      if(measurementActive){
+        measurementHandlePoint?.(e.latlng);
+        e.originalEvent?.stopPropagation?.();
+        return;
+      }
       selectLayer(m); e.originalEvent.stopPropagation();
     });
     m.on('dragstart', clearSelection);
@@ -740,7 +757,14 @@
       if (k === 'text') {
         const { text='', size=12, color='#111', bg='#fff', border='#e5e7eb' } = f.properties || {};
         const mk = L.marker(p, { icon: makeTextDivIcon(text,size,color,bg,border), draggable:true }).addTo(overlayLayer);
-        mk.on('click', e => { if(measurementActive){ return; } selectLayer(mk); e.originalEvent.stopPropagation(); });
+        mk.on('click', e => {
+          if(measurementActive){
+            measurementHandlePoint?.(e.latlng);
+            e.originalEvent?.stopPropagation?.();
+            return;
+          }
+          selectLayer(mk); e.originalEvent.stopPropagation();
+        });
         mk.on('dragstart', clearSelection);
         return;
       }
@@ -749,7 +773,14 @@
         const mk = L.marker(p, { icon: makeNatoIcon(domain,aff,size), draggable:true });
         mk.options.meta = { kind:'nato', domain, aff, size, id: id || generateOverlayId('nato') };
         mk.addTo(overlayLayer);
-        mk.on('click', e => { if(measurementActive){ return; } selectLayer(mk); e.originalEvent.stopPropagation(); });
+        mk.on('click', e => {
+          if(measurementActive){
+            measurementHandlePoint?.(e.latlng);
+            e.originalEvent?.stopPropagation?.();
+            return;
+          }
+          selectLayer(mk); e.originalEvent.stopPropagation();
+        });
         mk.on('dragstart', clearSelection);
         return;
       }
