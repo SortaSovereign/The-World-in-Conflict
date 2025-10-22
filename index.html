@@ -560,6 +560,8 @@
         e.originalEvent?.stopPropagation?.();
         return;
       }
+      const mode = toolMode?.value;
+      if(mode === 'weaponRange' || mode === 'maneuver') return;
       selectLayer(m); e.originalEvent.stopPropagation();
     });
     m.on('dragstart', clearSelection);
@@ -779,6 +781,8 @@
             e.originalEvent?.stopPropagation?.();
             return;
           }
+          const mode = toolMode?.value;
+          if(mode === 'weaponRange' || mode === 'maneuver') return;
           selectLayer(mk); e.originalEvent.stopPropagation();
         });
         mk.on('dragstart', clearSelection);
