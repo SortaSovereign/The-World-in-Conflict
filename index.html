@@ -206,28 +206,29 @@
 
   /* ===== Measurement tool ===== */
   let measurementActive = false;
-  let toolMode = null;
-  const updateOverlayPointerInteractivity = () => {
-    const disable = measurementActive || (toolMode && toolMode.value !== 'select');
-    const value = disable ? 'none' : '';
-    if (overlayPane) overlayPane.style.pointerEvents = value;
-    if (markerPane) markerPane.style.pointerEvents = value;
-  };
   (function addMeasureTool(){
     let active=false, start=null, guide=null;
     const group = L.layerGroup().addTo(map);
+    const overlayPane = map.getPanes().overlayPane;
+    const markerPane = map.getPanes().markerPane;
     const measureBtn = document.getElementById('measureBtn');
     const clearBtn   = document.getElementById('clearBtn');
 
     function pxDist(a,b){ return Math.hypot(b.lng-a.lng, b.lat-a.lat); }
     function fmt(px){ return (px*UNITS_PER_PIXEL).toFixed(2)+' '+UNIT_NAME; }
+    function syncOverlayInteractivity(){
+      const value = measurementActive ? 'none' : '';
+      overlayPane.style.pointerEvents = value;
+      if (markerPane) markerPane.style.pointerEvents = value;
+    }
+
     function begin(){
-      active=true; start=null; measurementActive = true; updateOverlayPointerInteractivity();
+      active=true; start=null; measurementActive = true; syncOverlayInteractivity();
       resetManeuverDraft();
       mapEl.style.cursor='crosshair'; mapEl.focus();
     }
     function cancel(){
-      active=false; start=null; measurementActive = false; updateOverlayPointerInteractivity();
+      active=false; start=null; measurementActive = false; syncOverlayInteractivity();
       if(guide){ map.removeLayer(guide); guide=null; }
       mapEl.style.cursor='';
       measureBtn?.classList.remove('active');
@@ -327,7 +328,6 @@
     weaponOpts.style.display = (toolMode.value === 'weaponRange') ? '' : 'none';
     maneuverOpts.style.display = (toolMode.value === 'maneuver') ? '' : 'none';
     if(toolMode.value !== 'maneuver') resetManeuverDraft();
-    updateOverlayPointerInteractivity();
   }
   toolMode.addEventListener('change', syncToolPanels);
   syncToolPanels();
