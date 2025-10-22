@@ -175,6 +175,8 @@
     keyboard: true
   });
   const mapEl = map.getContainer();
+  const overlayPane = map.getPanes().overlayPane;
+  const markerPane = map.getPanes().markerPane;
   setTimeout(() => mapEl.focus(), 0);
 
   L.tileLayer(TILE_URL, {
@@ -306,7 +308,7 @@
     if(maneuverGuide){ map.removeLayer(maneuverGuide); maneuverGuide=null; }
   }
 
-  const toolMode = document.getElementById('toolMode');
+  toolMode = document.getElementById('toolMode');
   const textOpts = document.getElementById('textOpts');
   const natoOpts = document.getElementById('natoOpts');
   const weaponOpts = document.getElementById('weaponOpts');
