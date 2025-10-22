@@ -71,6 +71,8 @@
         <option value="select">Select / Move</option>
         <option value="text">Add Text</option>
         <option value="nato">Add NATO Icon</option>
+        <option value="weaponRange">Weapon Range</option>
+        <option value="maneuver">Line of Maneuver</option>
       </select>
     </div>
 
@@ -109,6 +111,34 @@
         <label>Size</label><input id="natoSize" type="number" value="36" min="16" max="96"/>
       </div>
       <div class="twic-muted">Click map to place a NATO symbol.</div>
+    </div>
+
+    <!-- Weapon engagement range options -->
+    <div id="weaponOpts" style="display:none">
+      <div class="twic-row"><label>Radius (nm)</label><input id="weaponRadius" type="number" value="180" min="18" step="18"/></div>
+      <div class="twic-row">
+        <label>Stroke</label><input id="weaponStroke" type="color" value="#ef4444"/>
+        <label>Fill</label><input id="weaponFill" type="color" value="#ef4444"/>
+      </div>
+      <div class="twic-row"><label>Fill α</label><input id="weaponOpacity" type="number" value="0.15" min="0" max="1" step="0.05"/></div>
+      <div class="twic-muted">Click map to place a range circle in nautical miles.</div>
+    </div>
+
+    <!-- Maneuver line options -->
+    <div id="maneuverOpts" style="display:none">
+      <div class="twic-row">
+        <label>Color</label><input id="maneuverColor" type="color" value="#2563eb"/>
+        <label>Width</label><input id="maneuverWidth" type="number" value="3" min="1" max="12"/>
+      </div>
+      <div class="twic-row">
+        <label>Dash</label>
+        <select id="maneuverDash">
+          <option value="solid">Solid</option>
+          <option value="dashed" selected>Dashed</option>
+          <option value="dotted">Dotted</option>
+        </select>
+      </div>
+      <div class="twic-muted">Click start and end points to draw a line of maneuver.</div>
     </div>
 
     <!-- Share + overlay actions -->
@@ -160,7 +190,7 @@
   map.flyTo([-56,128], 2, { animate:true, duration:1.2 });
 
   /* ===== Coordinate HUD ===== */
-  const UNITS_PER_PIXEL = 30, UNIT_NAME = 'km';
+  const UNITS_PER_PIXEL = 18, UNIT_NAME = 'nautical miles';
   (function addCoordinateHUD(){
     const hud = document.getElementById('twicHud');
     function render(e){
@@ -173,14 +203,34 @@
   })();
 
   /* ===== Measurement tool ===== */
+  let measurementActive = false;
   (function addMeasureTool(){
     let active=false, start=null, guide=null;
     const group = L.layerGroup().addTo(map);
+    const overlayPane = map.getPanes().overlayPane;
+    const markerPane = map.getPanes().markerPane;
+    const measureBtn = document.getElementById('measureBtn');
+    const clearBtn   = document.getElementById('clearBtn');
+
     function pxDist(a,b){ return Math.hypot(b.lng-a.lng, b.lat-a.lat); }
     function fmt(px){ return (px*UNITS_PER_PIXEL).toFixed(2)+' '+UNIT_NAME; }
+    function syncOverlayInteractivity(){
+      const value = measurementActive ? 'none' : '';
+      overlayPane.style.pointerEvents = value;
+      if (markerPane) markerPane.style.pointerEvents = value;
+    }
 
-    function begin(){ active=true; start=null; mapEl.style.cursor='crosshair'; mapEl.focus(); }
-    function cancel(){ active=false; start=null; if(guide){ map.removeLayer(guide); guide=null; } mapEl.style.cursor=''; }
+    function begin(){
+      active=true; start=null; measurementActive = true; syncOverlayInteractivity();
+      resetManeuverDraft();
+      mapEl.style.cursor='crosshair'; mapEl.focus();
+    }
+    function cancel(){
+      active=false; start=null; measurementActive = false; syncOverlayInteractivity();
+      if(guide){ map.removeLayer(guide); guide=null; }
+      mapEl.style.cursor='';
+      measureBtn?.classList.remove('active');
+    }
     function clearAll(){ group.clearLayers(); cancel(); }
 
     map.on('click', e => {
@@ -202,9 +252,6 @@
     map.on('mousemove', e => { if(active && guide && start) guide.setLatLngs([start, e.latlng]); });
     document.addEventListener('keydown', e => { if(e.key === 'Escape') cancel(); });
 
-    // Buttons
-    const measureBtn = document.getElementById('measureBtn');
-    const clearBtn   = document.getElementById('clearBtn');
     measureBtn.onclick = () => { measureBtn.classList.add('active'); begin(); };
     clearBtn.onclick   = () => { measureBtn.classList.remove('active'); clearAll(); };
   })();
@@ -212,16 +259,76 @@
   /* ===== Overlay: text + simplified NATO symbols (frame/fill only) ===== */
   const overlayLayer = L.layerGroup().addTo(map);
   let selected = null;
-  function clearSelection(){ if(selected && selected._icon) selected._icon.style.outline=''; selected=null; }
-  function selectLayer(l){ clearSelection(); selected=l; if(l._icon) l._icon.style.outline='2px solid #111827'; }
+  let maneuverStart = null, maneuverGuide = null;
+
+  function capturePathStyle(layer){
+    return {
+      color: layer.options.color,
+      weight: layer.options.weight,
+      dashArray: layer.options.dashArray,
+      fillColor: layer.options.fillColor,
+      fillOpacity: layer.options.fillOpacity
+    };
+  }
+
+  function clearSelection(){
+    if(!selected) return;
+    if(selected._icon){
+      selected._icon.style.outline='';
+    } else if(selected.setStyle && selected.options._selectedBackup){
+      selected.setStyle(selected.options._selectedBackup);
+      delete selected.options._selectedBackup;
+    }
+    selected=null;
+  }
+  function selectLayer(l){
+    if(measurementActive) return;
+    clearSelection();
+    selected=l;
+    if(l._icon){
+      l._icon.style.outline='2px solid #111827';
+    } else if(l.setStyle){
+      l.options._selectedBackup = capturePathStyle(l);
+      const highlight = { color:'#111827', weight:(l.options.weight || 2)+1 };
+      if(!l.options.fillColor) highlight.dashArray = '4,3';
+      l.setStyle(highlight);
+    }
+  }
+  function attachSelectablePath(layer){
+    layer.on('click', e => {
+      if(measurementActive){ e.originalEvent.stopPropagation(); return; }
+      selectLayer(layer);
+      e.originalEvent.stopPropagation();
+    });
+  }
+  function resetManeuverDraft(){
+    maneuverStart = null;
+    if(maneuverGuide){ map.removeLayer(maneuverGuide); maneuverGuide=null; }
+  }
 
   const toolMode = document.getElementById('toolMode');
   const textOpts = document.getElementById('textOpts');
   const natoOpts = document.getElementById('natoOpts');
-  toolMode.addEventListener('change', () => {
+  const weaponOpts = document.getElementById('weaponOpts');
+  const maneuverOpts = document.getElementById('maneuverOpts');
+
+  const weaponRadius = document.getElementById('weaponRadius');
+  const weaponStroke = document.getElementById('weaponStroke');
+  const weaponFill = document.getElementById('weaponFill');
+  const weaponOpacity = document.getElementById('weaponOpacity');
+  const maneuverColor = document.getElementById('maneuverColor');
+  const maneuverWidth = document.getElementById('maneuverWidth');
+  const maneuverDash = document.getElementById('maneuverDash');
+
+  function syncToolPanels(){
     textOpts.style.display = (toolMode.value === 'text') ? '' : 'none';
     natoOpts.style.display = (toolMode.value === 'nato') ? '' : 'none';
-  });
+    weaponOpts.style.display = (toolMode.value === 'weaponRange') ? '' : 'none';
+    maneuverOpts.style.display = (toolMode.value === 'maneuver') ? '' : 'none';
+    if(toolMode.value !== 'maneuver') resetManeuverDraft();
+  }
+  toolMode.addEventListener('change', syncToolPanels);
+  syncToolPanels();
 
   /* Text boxes */
   function makeTextDivIcon(t, s=12, c='#111', bg='#fff', bo='#e5e7eb'){
@@ -235,7 +342,10 @@
     const bg= txtBg.value;
     const b = txtBorder.value;
     const m = L.marker(p, { icon: makeTextDivIcon(t,s,c,bg,b), draggable:true }).addTo(overlayLayer);
-    m.on('click', e => { selectLayer(m); e.originalEvent.stopPropagation(); });
+    m.on('click', e => {
+      if(measurementActive){ e.originalEvent.stopPropagation(); return; }
+      selectLayer(m); e.originalEvent.stopPropagation();
+    });
     m.on('dragstart', clearSelection);
   }
 
@@ -287,18 +397,69 @@
     const s = +natoSize.value || 36;
     const m = L.marker(p, { icon: makeNatoIcon(d,a,s), draggable:true }).addTo(overlayLayer);
     m.options.meta = { kind:'nato', domain:d, aff:a, size:s };
-    m.on('click', e => { selectLayer(m); e.originalEvent.stopPropagation(); });
+    m.on('click', e => {
+      if(measurementActive){ e.originalEvent.stopPropagation(); return; }
+      selectLayer(m); e.originalEvent.stopPropagation();
+    });
     m.on('dragstart', clearSelection);
   }
 
+  function dashPatternFromValue(val){
+    switch(val){
+      case 'dashed': return '10,6';
+      case 'dotted': return '3,6';
+      default: return '';
+    }
+  }
+  function addWeaponRangeAt(p){
+    const radiusNm = Math.max(0, +weaponRadius.value || 0);
+    if(!radiusNm) return;
+    const stroke = weaponStroke.value || '#ef4444';
+    const fill = weaponFill.value || stroke;
+    const fillOpacity = Math.min(1, Math.max(0, parseFloat(weaponOpacity.value) || 0));
+    const circle = L.circle(p, {
+      radius: radiusNm / UNITS_PER_PIXEL,
+      color: stroke,
+      weight: 2,
+      fillColor: fill,
+      fillOpacity
+    }).addTo(overlayLayer);
+    circle.options.meta = { kind:'weaponRange', radiusNm, color: stroke, fillColor: fill, fillOpacity };
+    attachSelectablePath(circle);
+  }
+  function handleManeuverClick(p){
+    const color = maneuverColor.value || '#2563eb';
+    const weight = +maneuverWidth.value || 3;
+    const dashArray = dashPatternFromValue(maneuverDash.value);
+    if(!maneuverStart){
+      maneuverStart = p;
+      maneuverGuide = L.polyline([p,p], { color, weight, dashArray, opacity:0.6, interactive:false }).addTo(map);
+    } else {
+      const latlngs = [maneuverStart, p];
+      const poly = L.polyline(latlngs, { color, weight, dashArray }).addTo(overlayLayer);
+      poly.options.meta = { kind:'maneuver', color, weight, dashArray };
+      attachSelectablePath(poly);
+      resetManeuverDraft();
+    }
+  }
+  map.on('mousemove', e => {
+    if(maneuverStart && maneuverGuide) maneuverGuide.setLatLngs([maneuverStart, e.latlng]);
+  });
+  document.addEventListener('keydown', e => {
+    if(e.key === 'Escape' && toolMode.value === 'maneuver') resetManeuverDraft();
+  });
+
   map.on('click', e => {
+    if (measurementActive) return;
     if (toolMode.value === 'text') addTextAt(e.latlng);
     else if (toolMode.value === 'nato') addNatoAt(e.latlng);
+    else if (toolMode.value === 'weaponRange') addWeaponRangeAt(e.latlng);
+    else if (toolMode.value === 'maneuver') handleManeuverClick(e.latlng);
     else clearSelection();
   });
 
   document.getElementById('btnDelete').onclick = () => { if (selected) { overlayLayer.removeLayer(selected); selected=null; } };
-  document.getElementById('btnOverlayClear').onclick = () => { overlayLayer.clearLayers(); selected=null; };
+  document.getElementById('btnOverlayClear').onclick = () => { overlayLayer.clearLayers(); selected=null; resetManeuverDraft(); };
   mapEl.addEventListener('keydown', e => {
     if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
       overlayLayer.removeLayer(selected); selected=null;
@@ -311,10 +472,45 @@
   function overlaysToFeatureCollection() {
     const feats = [];
     overlayLayer.eachLayer(layer => {
+      const metaKind = layer.options?.meta?.kind;
+
+      if (metaKind === 'maneuver') {
+        const latlngs = layer.getLatLngs?.() || [];
+        if (!latlngs.length) return;
+        const coords = latlngs.map(ll => [ll.lng, ll.lat]);
+        feats.push({
+          type:'Feature',
+          geometry:{ type:'LineString', coordinates: coords },
+          properties:{
+            kind:'maneuver',
+            color: layer.options.meta.color,
+            weight: layer.options.meta.weight,
+            dashArray: layer.options.meta.dashArray || ''
+          }
+        });
+        return;
+      }
+
+      if (metaKind === 'weaponRange') {
+        if (!layer.getLatLng) return;
+        const center = layer.getLatLng();
+        feats.push({
+          type:'Feature',
+          geometry:{ type:'Point', coordinates:[center.lng, center.lat] },
+          properties:{
+            kind:'weaponRange',
+            radiusNm: layer.options.meta.radiusNm,
+            color: layer.options.meta.color,
+            fillColor: layer.options.meta.fillColor,
+            fillOpacity: layer.options.meta.fillOpacity
+          }
+        });
+        return;
+      }
+
       if (!layer.getLatLng) return;
       const p = layer.getLatLng();
       let props = { kind:'unknown' };
-
 
       if (layer.options.icon && typeof layer.options.icon.options.html === 'string') {
         const div = document.createElement('div');
@@ -350,17 +546,49 @@
   }
 
   function featureCollectionToOverlays(gj) {
-    overlayLayer.clearLayers(); selected = null;
+    overlayLayer.clearLayers(); selected = null; resetManeuverDraft();
     (gj.features || []).forEach(f => {
+      const k = f.properties?.kind;
+
+      if (k === 'maneuver') {
+        if (f.geometry?.type !== 'LineString') return;
+        const coords = Array.isArray(f.geometry.coordinates) ? f.geometry.coordinates : [];
+        const latlngs = coords.map(pt => L.latLng(pt[1], pt[0])).filter(ll => Number.isFinite(ll.lat) && Number.isFinite(ll.lng));
+        if (latlngs.length < 2) return;
+        const { color='#2563eb', weight=3, dashArray='' } = f.properties || {};
+        const poly = L.polyline(latlngs, { color, weight, dashArray }).addTo(overlayLayer);
+        poly.options.meta = { kind:'maneuver', color, weight, dashArray };
+        attachSelectablePath(poly);
+        return;
+      }
+
+      if (k === 'weaponRange') {
+        if (f.geometry?.type !== 'Point') return;
+        const [cx,cy] = f.geometry.coordinates;
+        const center = L.latLng(cy,cx);
+        const { radiusNm=0, color='#ef4444', fillColor='#ef4444', fillOpacity=0.15 } = f.properties || {};
+        if (!radiusNm) return;
+        const normalizedFill = Math.min(1, Math.max(0, +fillOpacity || 0));
+        const circle = L.circle(center, {
+          radius: radiusNm / UNITS_PER_PIXEL,
+          color,
+          weight: 2,
+          fillColor,
+          fillOpacity: normalizedFill
+        }).addTo(overlayLayer);
+        circle.options.meta = { kind:'weaponRange', radiusNm, color, fillColor, fillOpacity: normalizedFill };
+        attachSelectablePath(circle);
+        return;
+      }
+
       if (f.geometry?.type !== 'Point') return;
       const [x,y] = f.geometry.coordinates;
       const p = L.latLng(y,x);
-      const k = f.properties?.kind;
 
       if (k === 'text') {
         const { text='', size=12, color='#111', bg='#fff', border='#e5e7eb' } = f.properties || {};
         const mk = L.marker(p, { icon: makeTextDivIcon(text,size,color,bg,border), draggable:true }).addTo(overlayLayer);
-        mk.on('click', e => { selectLayer(mk); e.originalEvent.stopPropagation(); });
+        mk.on('click', e => { if(measurementActive){ e.originalEvent.stopPropagation(); return; } selectLayer(mk); e.originalEvent.stopPropagation(); });
         mk.on('dragstart', clearSelection);
         return;
       }
@@ -368,7 +596,7 @@
         const { domain='G', aff='F', size=36 } = f.properties || {};
         const mk = L.marker(p, { icon: makeNatoIcon(domain,aff,size), draggable:true }).addTo(overlayLayer);
         mk.options.meta = { kind:'nato', domain, aff, size };
-        mk.on('click', e => { selectLayer(mk); e.originalEvent.stopPropagation(); });
+        mk.on('click', e => { if(measurementActive){ e.originalEvent.stopPropagation(); return; } selectLayer(mk); e.originalEvent.stopPropagation(); });
         mk.on('dragstart', clearSelection);
         return;
       }
