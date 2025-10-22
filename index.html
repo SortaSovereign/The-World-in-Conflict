@@ -216,10 +216,41 @@
 
     function pxDist(a,b){ return Math.hypot(b.lng-a.lng, b.lat-a.lat); }
     function fmt(px){ return (px*UNITS_PER_PIXEL).toFixed(2)+' '+UNIT_NAME; }
+
+    let prevInteractions = null;
+    function disableMapInteractions(){
+      if(prevInteractions) return;
+      prevInteractions = {
+        dragging: map.dragging?.enabled?.() ?? false,
+        scrollWheelZoom: map.scrollWheelZoom?.enabled?.() ?? false,
+        doubleClickZoom: map.doubleClickZoom?.enabled?.() ?? false,
+        boxZoom: map.boxZoom?.enabled?.() ?? false,
+        touchZoom: map.touchZoom?.enabled?.() ?? false,
+        keyboard: map.keyboard?.enabled?.() ?? false
+      };
+      map.dragging?.disable?.();
+      map.scrollWheelZoom?.disable?.();
+      map.doubleClickZoom?.disable?.();
+      map.boxZoom?.disable?.();
+      map.touchZoom?.disable?.();
+      map.keyboard?.disable?.();
+    }
+    function restoreMapInteractions(){
+      if(!prevInteractions) return;
+      if(prevInteractions.dragging) map.dragging?.enable?.();
+      if(prevInteractions.scrollWheelZoom) map.scrollWheelZoom?.enable?.();
+      if(prevInteractions.doubleClickZoom) map.doubleClickZoom?.enable?.();
+      if(prevInteractions.boxZoom) map.boxZoom?.enable?.();
+      if(prevInteractions.touchZoom) map.touchZoom?.enable?.();
+      if(prevInteractions.keyboard) map.keyboard?.enable?.();
+      prevInteractions = null;
+    }
     function syncOverlayInteractivity(){
-      const value = measurementActive ? 'none' : '';
+      const disable = measurementActive;
+      const value = disable ? 'none' : '';
       overlayPane.style.pointerEvents = value;
       if (markerPane) markerPane.style.pointerEvents = value;
+      if(disable) disableMapInteractions(); else restoreMapInteractions();
     }
 
     function begin(){
@@ -262,6 +293,115 @@
   const overlayLayer = L.layerGroup().addTo(map);
   let selected = null;
   let maneuverStart = null, maneuverGuide = null;
+
+  const overlayIndex = new Map();
+  const pendingRangeAttachments = new Map();
+
+  function generateOverlayId(kind='overlay'){
+    if(window.crypto?.randomUUID) return crypto.randomUUID();
+    return `${kind}-${Math.random().toString(36).slice(2,10)}${Date.now().toString(36)}`;
+  }
+
+  function ensureMarkerAttachmentHandlers(marker){
+    if(marker._rangeDragHandler) return;
+    marker._rangeDragHandler = () => {
+      const latlng = marker.getLatLng();
+      marker._attachedRanges?.forEach(range => range.setLatLng(latlng));
+    };
+    marker.on('drag', marker._rangeDragHandler);
+  }
+
+  function attachRangeToMarker(range, marker){
+    if(!marker) return;
+    const markerId = marker.options?.meta?.id;
+    if(!markerId) return;
+    if(!marker._attachedRanges) marker._attachedRanges = new Set();
+    marker._attachedRanges.add(range);
+    range._attachedTo = marker;
+    range.options.meta.attachedTo = markerId;
+    range.setLatLng(marker.getLatLng());
+    ensureMarkerAttachmentHandlers(marker);
+  }
+
+  function queueRangeForMarker(range, markerId){
+    if(!markerId) return;
+    const list = pendingRangeAttachments.get(markerId) || [];
+    list.push(range);
+    pendingRangeAttachments.set(markerId, list);
+  }
+
+  function registerMarker(layer){
+    if(!layer.options.meta) layer.options.meta = { kind:'nato' };
+    if(!layer.options.meta.id) layer.options.meta.id = generateOverlayId('nato');
+    const id = layer.options.meta.id;
+    overlayIndex.set(id, layer);
+    const queued = pendingRangeAttachments.get(id);
+    if(queued){
+      queued.forEach(range => attachRangeToMarker(range, layer));
+      pendingRangeAttachments.delete(id);
+    }
+  }
+
+  function detachRange(range){
+    const anchorId = range.options?.meta?.attachedTo || null;
+    if(anchorId && !range._attachedTo){
+      const pending = pendingRangeAttachments.get(anchorId);
+      if(pending){
+        const next = pending.filter(item => item !== range);
+        if(next.length) pendingRangeAttachments.set(anchorId, next);
+        else pendingRangeAttachments.delete(anchorId);
+      }
+    }
+    const marker = range._attachedTo;
+    if(marker?._attachedRanges){
+      marker._attachedRanges.delete(range);
+      if(marker._attachedRanges.size === 0){
+        if(marker._rangeDragHandler){
+          marker.off('drag', marker._rangeDragHandler);
+          marker._rangeDragHandler = null;
+        }
+        delete marker._attachedRanges;
+      }
+    }
+    range._attachedTo = null;
+    if(range.options?.meta) range.options.meta.attachedTo = null;
+  }
+
+  function unregisterMarker(layer){
+    const id = layer.options?.meta?.id;
+    if(!id) return;
+    overlayIndex.delete(id);
+    if(layer._attachedRanges){
+      [...layer._attachedRanges].forEach(range => {
+        overlayLayer.removeLayer(range);
+      });
+    }
+  }
+
+  overlayLayer.on('layeradd', e => {
+    const layer = e.layer;
+    const kind = layer?.options?.meta?.kind;
+    if(kind === 'nato'){
+      registerMarker(layer);
+    } else if(kind === 'weaponRange'){
+      const anchorId = layer.options.meta.attachedTo;
+      if(anchorId){
+        const marker = overlayIndex.get(anchorId);
+        if(marker) attachRangeToMarker(layer, marker);
+        else queueRangeForMarker(layer, anchorId);
+      }
+    }
+  });
+
+  overlayLayer.on('layerremove', e => {
+    const layer = e.layer;
+    const kind = layer?.options?.meta?.kind;
+    if(kind === 'nato'){
+      unregisterMarker(layer);
+    } else if(kind === 'weaponRange'){
+      detachRange(layer);
+    }
+  });
 
   function capturePathStyle(layer){
     return {
@@ -397,8 +537,10 @@
     const d = natoDomain.value;   // A/S/G/U
     const a = natoAff.value;      // F/H/N
     const s = +natoSize.value || 36;
-    const m = L.marker(p, { icon: makeNatoIcon(d,a,s), draggable:true }).addTo(overlayLayer);
-    m.options.meta = { kind:'nato', domain:d, aff:a, size:s };
+    const id = generateOverlayId('nato');
+    const m = L.marker(p, { icon: makeNatoIcon(d,a,s), draggable:true });
+    m.options.meta = { kind:'nato', domain:d, aff:a, size:s, id };
+    m.addTo(overlayLayer);
     m.on('click', e => {
       if(measurementActive){ e.originalEvent.stopPropagation(); return; }
       selectLayer(m); e.originalEvent.stopPropagation();
@@ -419,15 +561,20 @@
     const stroke = weaponStroke.value || '#ef4444';
     const fill = weaponFill.value || stroke;
     const fillOpacity = Math.min(1, Math.max(0, parseFloat(weaponOpacity.value) || 0));
-    const circle = L.circle(p, {
+    const anchorMarker = (selected && selected.options?.meta?.kind === 'nato') ? selected : null;
+    const center = anchorMarker ? anchorMarker.getLatLng() : p;
+    const circle = L.circle(center, {
       radius: radiusNm / UNITS_PER_PIXEL,
       color: stroke,
       weight: 2,
       fillColor: fill,
       fillOpacity
-    }).addTo(overlayLayer);
-    circle.options.meta = { kind:'weaponRange', radiusNm, color: stroke, fillColor: fill, fillOpacity };
+    });
+    const attachedTo = anchorMarker?.options?.meta?.id || null;
+    circle.options.meta = { kind:'weaponRange', radiusNm, color: stroke, fillColor: fill, fillOpacity, attachedTo };
+    circle.addTo(overlayLayer);
     attachSelectablePath(circle);
+    if(anchorMarker) attachRangeToMarker(circle, anchorMarker);
   }
   function handleManeuverClick(p){
     const color = maneuverColor.value || '#2563eb';
@@ -504,7 +651,8 @@
             radiusNm: layer.options.meta.radiusNm,
             color: layer.options.meta.color,
             fillColor: layer.options.meta.fillColor,
-            fillOpacity: layer.options.meta.fillOpacity
+            fillOpacity: layer.options.meta.fillOpacity,
+            attachedTo: layer.options.meta.attachedTo || null
           }
         });
         return;
@@ -534,7 +682,8 @@
           kind:   'nato',
           domain: layer.options.meta.domain, // A/S/G/U
           aff:    layer.options.meta.aff,    // F/H/N
-          size:   layer.options.meta.size
+          size:   layer.options.meta.size,
+          id:     layer.options.meta.id
         };
       }
 
@@ -568,7 +717,7 @@
         if (f.geometry?.type !== 'Point') return;
         const [cx,cy] = f.geometry.coordinates;
         const center = L.latLng(cy,cx);
-        const { radiusNm=0, color='#ef4444', fillColor='#ef4444', fillOpacity=0.15 } = f.properties || {};
+        const { radiusNm=0, color='#ef4444', fillColor='#ef4444', fillOpacity=0.15, attachedTo=null } = f.properties || {};
         if (!radiusNm) return;
         const normalizedFill = Math.min(1, Math.max(0, +fillOpacity || 0));
         const circle = L.circle(center, {
@@ -577,8 +726,9 @@
           weight: 2,
           fillColor,
           fillOpacity: normalizedFill
-        }).addTo(overlayLayer);
-        circle.options.meta = { kind:'weaponRange', radiusNm, color, fillColor, fillOpacity: normalizedFill };
+        });
+        circle.options.meta = { kind:'weaponRange', radiusNm, color, fillColor, fillOpacity: normalizedFill, attachedTo };
+        circle.addTo(overlayLayer);
         attachSelectablePath(circle);
         return;
       }
@@ -595,9 +745,10 @@
         return;
       }
       if (k === 'nato') {
-        const { domain='G', aff='F', size=36 } = f.properties || {};
-        const mk = L.marker(p, { icon: makeNatoIcon(domain,aff,size), draggable:true }).addTo(overlayLayer);
-        mk.options.meta = { kind:'nato', domain, aff, size };
+        const { domain='G', aff='F', size=36, id=null } = f.properties || {};
+        const mk = L.marker(p, { icon: makeNatoIcon(domain,aff,size), draggable:true });
+        mk.options.meta = { kind:'nato', domain, aff, size, id: id || generateOverlayId('nato') };
+        mk.addTo(overlayLayer);
         mk.on('click', e => { if(measurementActive){ e.originalEvent.stopPropagation(); return; } selectLayer(mk); e.originalEvent.stopPropagation(); });
         mk.on('dragstart', clearSelection);
         return;
