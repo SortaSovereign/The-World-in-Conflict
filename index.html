@@ -16,10 +16,11 @@
       background:#ffffffd9; padding:6px 10px; border-radius:8px;
       font:12px/1.2 system-ui,sans-serif; box-shadow:0 2px 8px rgba(0,0,0,.15);
     }
-    .twic-badge {
+    .twic-badge, .leaflet-tooltip.twic-badge {
       font:600 12px/1.2 system-ui,sans-serif; color:#111; background:#fff;
       border:1px solid #e5e7eb; border-radius:6px; padding:3px 6px;
       box-shadow:0 1px 6px rgba(0,0,0,.15);
+      pointer-events:none;
     }
     .twic-toolbar {
       position:absolute; right:8px; top:8px; z-index:1000; display:flex; gap:6px;
@@ -223,14 +224,71 @@
   /* ===== Measurement tool ===== */
   let measurementActive = false;
   let measurementHandlePoint = null;
+
+  function formatNauticalMiles(lengthNm){
+    return `${lengthNm.toFixed(2)} ${UNIT_NAME}`;
+  }
+
+  function computeLineLengthNm(start, end){
+    if(!start || !end) return 0;
+    return Math.hypot(end.lng - start.lng, end.lat - start.lat) * UNITS_PER_PIXEL;
+  }
+
+  function midpointLatLng(start, end){
+    if(!start || !end) return null;
+    return L.latLng((start.lat + end.lat) / 2, (start.lng + end.lng) / 2);
+  }
+
+  function attachManeuverLengthLabel(polyline){
+    if(!polyline || typeof polyline.getLatLngs !== 'function') return;
+    const latlngs = polyline.getLatLngs();
+    if(!Array.isArray(latlngs) || latlngs.length < 2) return;
+
+    if(polyline._lengthTooltipRemoveHandler){
+      polyline.off('remove', polyline._lengthTooltipRemoveHandler);
+      polyline._lengthTooltipRemoveHandler = null;
+    }
+    if(polyline._lengthTooltip){
+      polyline.unbindTooltip();
+      polyline._lengthTooltip = null;
+    }
+
+    const start = latlngs[0];
+    const end = latlngs[latlngs.length - 1];
+    const nmLength = computeLineLengthNm(start, end);
+    const midpoint = midpointLatLng(start, end);
+    if(!midpoint) return;
+
+    const tooltip = L.tooltip({
+      permanent: true,
+      direction: 'center',
+      className: 'twic-badge twic-badge--maneuver',
+      offset: [0, 0],
+      opacity: 1
+    }).setContent(formatNauticalMiles(nmLength)).setLatLng(midpoint);
+
+    polyline.bindTooltip(tooltip);
+    polyline._lengthTooltip = tooltip;
+
+    const removeHandler = () => {
+      if(polyline._lengthTooltip){
+        polyline.unbindTooltip();
+        polyline._lengthTooltip = null;
+      }
+      if(polyline._lengthTooltipRemoveHandler){
+        polyline.off('remove', polyline._lengthTooltipRemoveHandler);
+        polyline._lengthTooltipRemoveHandler = null;
+      }
+    };
+
+    polyline._lengthTooltipRemoveHandler = removeHandler;
+    polyline.on('remove', removeHandler);
+  }
   (function addMeasureTool(){
     let active=false, start=null, guide=null;
     const group = L.layerGroup().addTo(map);
     const measureBtn = document.getElementById('measureBtn');
     const clearBtn   = document.getElementById('clearBtn');
-
-    function pxDist(a,b){ return Math.hypot(b.lng-a.lng, b.lat-a.lat); }
-    function fmt(px){ return (px*UNITS_PER_PIXEL).toFixed(2)+' '+UNIT_NAME; }
 
     let prevInteractions = null;
     function disableMapInteractions(){
@@ -274,9 +332,10 @@
       } else {
         const end = latlng;
         L.polyline([start,end], { color:'#111827', weight:3 }).addTo(group);
-        const mid = L.latLng((start.lat+end.lat)/2, (start.lng+end.lng)/2);
+        const nmLength = computeLineLengthNm(start, end);
+        const mid = midpointLatLng(start, end);
         L.marker(mid, {
-          icon: L.divIcon({ className:'twic-badge', html: fmt(pxDist(start,end)), iconSize: null }),
+          icon: L.divIcon({ className:'twic-badge', html: formatNauticalMiles(nmLength), iconSize: null }),
           interactive: false
         }).addTo(group);
         cancel();
@@ -626,6 +685,7 @@
       const poly = L.polyline(latlngs, { color, weight, dashArray }).addTo(overlayLayer);
       poly.options.meta = { kind:'maneuver', color, weight, dashArray };
       attachSelectablePath(poly);
+      attachManeuverLengthLabel(poly);
       resetManeuverDraft();
     }
   }
@@ -748,6 +808,7 @@
         const poly = L.polyline(latlngs, { color, weight, dashArray }).addTo(overlayLayer);
         poly.options.meta = { kind:'maneuver', color, weight, dashArray };
         attachSelectablePath(poly);
+        attachManeuverLengthLabel(poly);
         return;
       }
 
