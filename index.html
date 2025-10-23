@@ -193,9 +193,12 @@
 
   const overlayPointerLocks = new Set();
   function updateOverlayPointerPassthrough(){
-    const value = overlayPointerLocks.size ? 'none' : '';
-    if(overlayPane) overlayPane.style.pointerEvents = value;
-    if(markerPane) markerPane.style.pointerEvents = value;
+    const hasLocks = overlayPointerLocks.size > 0;
+    const maneuverOnly = (overlayPointerLocks.size === 1 && overlayPointerLocks.has('maneuver'));
+    const overlayValue = hasLocks ? 'none' : '';
+    const markerValue = (hasLocks && !maneuverOnly) ? 'none' : '';
+    if(overlayPane) overlayPane.style.pointerEvents = overlayValue;
+    if(markerPane) markerPane.style.pointerEvents = markerValue;
   }
   function setOverlayPointerPassthrough(lockId, enabled){
     if(!lockId) return;
@@ -572,7 +575,12 @@
         return;
       }
       const mode = toolMode?.value;
-      if(mode === 'weaponRange' || mode === 'maneuver') return;
+      if(mode === 'maneuver'){
+        handleManeuverClick(m.getLatLng());
+        e.originalEvent?.stopPropagation?.();
+        return;
+      }
+      if(mode === 'weaponRange') return;
       selectLayer(m); e.originalEvent.stopPropagation();
     });
     m.on('dragstart', clearSelection);
@@ -793,7 +801,12 @@
             return;
           }
           const mode = toolMode?.value;
-          if(mode === 'weaponRange' || mode === 'maneuver') return;
+          if(mode === 'maneuver'){
+            handleManeuverClick(mk.getLatLng());
+            e.originalEvent?.stopPropagation?.();
+            return;
+          }
+          if(mode === 'weaponRange') return;
           selectLayer(mk); e.originalEvent.stopPropagation();
         });
         mk.on('dragstart', clearSelection);
