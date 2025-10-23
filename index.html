@@ -368,7 +368,7 @@
   /* ===== Overlay: text + simplified NATO symbols (frame/fill only) ===== */
   const overlayLayer = L.layerGroup().addTo(map);
   let selected = null;
-  let maneuverStart = null, maneuverGuide = null;
+  let maneuverStart = null, maneuverGuide = null, maneuverGuideTooltip = null;
 
   const overlayIndex = new Map();
   const pendingRangeAttachments = new Map();
@@ -526,6 +526,7 @@
   function resetManeuverDraft(){
     maneuverStart = null;
     if(maneuverGuide){ map.removeLayer(maneuverGuide); maneuverGuide=null; }
+    if(maneuverGuideTooltip){ map.removeLayer(maneuverGuideTooltip); maneuverGuideTooltip=null; }
   }
 
   toolMode = document.getElementById('toolMode');
@@ -680,6 +681,13 @@
     if(!maneuverStart){
       maneuverStart = p;
       maneuverGuide = L.polyline([p,p], { color, weight, dashArray, opacity:0.6, interactive:false }).addTo(map);
+      maneuverGuideTooltip = L.tooltip({
+        permanent: true,
+        direction: 'center',
+        className: 'twic-badge twic-badge--maneuver',
+        offset: [0, 0],
+        opacity: 1
+      }).setContent(formatNauticalMiles(0)).setLatLng(p).addTo(map);
     } else {
       const latlngs = [maneuverStart, p];
       const poly = L.polyline(latlngs, { color, weight, dashArray }).addTo(overlayLayer);
@@ -690,7 +698,16 @@
     }
   }
   map.on('mousemove', e => {
-    if(maneuverStart && maneuverGuide) maneuverGuide.setLatLngs([maneuverStart, e.latlng]);
+    if(maneuverStart && maneuverGuide){
+      maneuverGuide.setLatLngs([maneuverStart, e.latlng]);
+      if(maneuverGuideTooltip){
+        const midpoint = midpointLatLng(maneuverStart, e.latlng);
+        if(midpoint){
+          const lengthNm = computeLineLengthNm(maneuverStart, e.latlng);
+          maneuverGuideTooltip.setLatLng(midpoint).setContent(formatNauticalMiles(lengthNm));
+        }
+      }
+    }
   });
   document.addEventListener('keydown', e => {
     if(e.key === 'Escape' && toolMode.value === 'maneuver') resetManeuverDraft();
