@@ -191,6 +191,19 @@
 
   map.flyTo([-56,128], 2, { animate:true, duration:1.2 });
 
+  const overlayPointerLocks = new Set();
+  function updateOverlayPointerPassthrough(){
+    const value = overlayPointerLocks.size ? 'none' : '';
+    if(overlayPane) overlayPane.style.pointerEvents = value;
+    if(markerPane) markerPane.style.pointerEvents = value;
+  }
+  function setOverlayPointerPassthrough(lockId, enabled){
+    if(!lockId) return;
+    if(enabled) overlayPointerLocks.add(lockId);
+    else overlayPointerLocks.delete(lockId);
+    updateOverlayPointerPassthrough();
+  }
+
   /* ===== Coordinate HUD ===== */
   const UNITS_PER_PIXEL = 18, UNIT_NAME = 'nautical miles';
   (function addCoordinateHUD(){
@@ -210,8 +223,6 @@
   (function addMeasureTool(){
     let active=false, start=null, guide=null;
     const group = L.layerGroup().addTo(map);
-    const overlayPane = map.getPanes().overlayPane;
-    const markerPane = map.getPanes().markerPane;
     const measureBtn = document.getElementById('measureBtn');
     const clearBtn   = document.getElementById('clearBtn');
 
@@ -248,9 +259,7 @@
     }
     function syncOverlayInteractivity(){
       const disable = measurementActive;
-      const value = disable ? 'none' : '';
-      overlayPane.style.pointerEvents = value;
-      if (markerPane) markerPane.style.pointerEvents = value;
+      setOverlayPointerPassthrough('measure', disable);
       if(disable) disableMapInteractions(); else restoreMapInteractions();
     }
 
@@ -476,7 +485,9 @@
     natoOpts.style.display = (toolMode.value === 'nato') ? '' : 'none';
     weaponOpts.style.display = (toolMode.value === 'weaponRange') ? '' : 'none';
     maneuverOpts.style.display = (toolMode.value === 'maneuver') ? '' : 'none';
-    if(toolMode.value !== 'maneuver') resetManeuverDraft();
+    const maneuverActive = (toolMode.value === 'maneuver');
+    setOverlayPointerPassthrough('maneuver', maneuverActive);
+    if(!maneuverActive) resetManeuverDraft();
   }
   toolMode.addEventListener('change', syncToolPanels);
   syncToolPanels();
