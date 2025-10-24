@@ -251,7 +251,7 @@
     function render(e){
       const z = map.getZoom();
       const p = e?.latlng ?? map.getCenter();
-      hud.textContent = `X,Y: ${p.lng.toFixed(0)}, ${p.lat.toFixed(0)} | Zoom: ${z} | 1 px = ${UNITS_PER_PIXEL} ${UNIT_NAME}`;
+      hud.textContent = `X,Y: ${p.lng.toFixed(1)}, ${p.lat.toFixed(1)} | Zoom: ${z} | 1 px = ${UNITS_PER_PIXEL} ${UNIT_NAME}`;
     }
     map.on('mousemove zoomend moveend', render);
     render();
