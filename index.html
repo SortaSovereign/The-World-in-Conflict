@@ -490,6 +490,7 @@
   const pendingManeuverAttachments = new Map();
   const anchoredTextLayers = new Set();
   const weaponRangeLayers = new Set();
+  const activeMarkerAnimations = new Map();
 
   function generateOverlayId(kind='overlay'){
     if(window.crypto?.randomUUID) return crypto.randomUUID();
