@@ -69,8 +69,8 @@
     <h3>Overlay Tools</h3>
 
     <div class="twic-row twic-tabs">
-      <button class="twic-btn twic-tab" type="button" data-panel="text">Text</button>
       <button class="twic-btn twic-tab" type="button" data-panel="nato">NATO</button>
+      <button class="twic-btn twic-tab" type="button" data-panel="text">Text</button>
       <button class="twic-btn twic-tab" type="button" data-panel="weaponRange">Range</button>
       <button class="twic-btn twic-tab" type="button" data-panel="maneuver">Maneuver</button>
     </div>
@@ -555,7 +555,11 @@
   }
 
   const toolTabs = Array.from(document.querySelectorAll('.twic-tab'));
-  let openOverlayPanel = toolTabs[0]?.dataset?.panel || 'text';
+  const DEFAULT_OVERLAY_PANEL = 'nato';
+  let openOverlayPanel =
+    toolTabs.find(btn => btn.dataset?.panel === DEFAULT_OVERLAY_PANEL)?.dataset?.panel ||
+    toolTabs[0]?.dataset?.panel ||
+    DEFAULT_OVERLAY_PANEL;
   const textOpts = document.getElementById('textOpts');
   const natoOpts = document.getElementById('natoOpts');
   const weaponOpts = document.getElementById('weaponOpts');
