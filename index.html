@@ -658,15 +658,32 @@
       l.setStyle(highlight);
     }
   }
+  function stopLeafletEvent(e){
+    const original = e?.originalEvent;
+    if(original){
+      if(L?.DomEvent?.stop) L.DomEvent.stop(original);
+      else {
+        original.stopPropagation?.();
+        original.preventDefault?.();
+      }
+      return;
+    }
+    if(!e) return;
+    if(L?.DomEvent?.stop) L.DomEvent.stop(e);
+    else {
+      e.stopPropagation?.();
+      e.preventDefault?.();
+    }
+  }
   function attachSelectablePath(layer){
     layer.on('click', e => {
       if(measurementActive){
         measurementHandlePoint?.(e.latlng);
-        e.originalEvent?.stopPropagation?.();
+        stopLeafletEvent(e);
         return;
       }
       selectLayer(layer);
-      e.originalEvent.stopPropagation();
+      stopLeafletEvent(e);
     });
   }
   function resetManeuverDraft(){
