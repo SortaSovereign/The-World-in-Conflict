@@ -377,6 +377,10 @@
     attachManeuverLengthLabel(polyline);
     syncManeuverHandle(polyline);
   }
+  function refreshManeuverLengthLabel(polyline){
+    if(!polyline) return;
+    updateManeuverPolylineArtifacts(polyline);
+  }
   function ensureManeuverLatLngSync(polyline){
     if(!polyline || polyline._maneuverLatLngSync) return;
     polyline._maneuverLatLngSync = true;
