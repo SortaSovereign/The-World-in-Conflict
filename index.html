@@ -127,7 +127,8 @@
       </div>
       <div class="twic-row"><label>Fill α</label><input id="weaponOpacity" type="number" value="0.15" min="0" max="1" step="0.05"/></div>
       <div class="twic-muted">Click map to place a range circle in nautical miles.</div>
-      <div style="display:flex; justify-content:flex-end; margin-top:6px;">
+      <div style="display:flex; justify-content:flex-end; gap:6px; margin-top:6px; flex-wrap:wrap;">
+        <button class="twic-btn" type="button" id="btnClearRanges">Remove all Ranges</button>
         <button class="twic-btn" type="button" id="btnPlaceRange">Place Range</button>
       </div>
     </div>
@@ -148,6 +149,7 @@
       </div>
       <div class="twic-muted">Click start and end points to draw a line of maneuver.</div>
       <div style="display:flex; justify-content:flex-end; gap:6px; margin-top:6px; flex-wrap:wrap;">
+        <button class="twic-btn" type="button" id="btnClearManeuvers">Remove all Maneuvers</button>
         <button class="twic-btn" type="button" id="btnExecuteManeuver">Execute</button>
         <button class="twic-btn" type="button" id="btnPlaceManeuver">Place Maneuver</button>
       </div>
@@ -928,6 +930,20 @@
     }
     selected=null;
   }
+  function clearOverlaysByKind(kind){
+    if(!kind) return;
+    const toRemove = [];
+    overlayLayer.eachLayer(layer => {
+      if(layer?.options?.meta?.kind === kind){
+        toRemove.push(layer);
+      }
+    });
+    if(!toRemove.length) return;
+    if(selected && toRemove.includes(selected)){
+      clearSelection();
+    }
+    toRemove.forEach(layer => overlayLayer.removeLayer(layer));
+  }
   function selectLayer(l){
     if(measurementActive) return;
     clearSelection();
@@ -997,8 +1013,10 @@
   const btnPlaceText = document.getElementById('btnPlaceText');
   const btnPlaceNato = document.getElementById('btnPlaceNato');
   const btnPlaceRange = document.getElementById('btnPlaceRange');
+  const btnClearRanges = document.getElementById('btnClearRanges');
   const btnExecuteManeuver = document.getElementById('btnExecuteManeuver');
   const btnPlaceManeuver = document.getElementById('btnPlaceManeuver');
+  const btnClearManeuvers = document.getElementById('btnClearManeuvers');
 
   function beginSinglePlacement(mode){
     if(!mode) return;
@@ -1032,8 +1050,13 @@
   btnPlaceText?.addEventListener('click', () => beginSinglePlacement('text'));
   btnPlaceNato?.addEventListener('click', () => beginSinglePlacement('nato'));
   btnPlaceRange?.addEventListener('click', () => beginSinglePlacement('weaponRange'));
+  btnClearRanges?.addEventListener('click', () => clearOverlaysByKind('weaponRange'));
   btnExecuteManeuver?.addEventListener('click', executeManeuvers);
   btnPlaceManeuver?.addEventListener('click', () => beginSinglePlacement('maneuver'));
+  btnClearManeuvers?.addEventListener('click', () => {
+    clearOverlaysByKind('maneuver');
+    resetManeuverDraft();
+  });
 
   function syncToolPanels(){
     toolTabs.forEach(btn => btn.classList.toggle('active', btn.dataset.panel === openOverlayPanel));
