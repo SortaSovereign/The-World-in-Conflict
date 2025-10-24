@@ -555,7 +555,7 @@
   }
 
   const toolTabs = Array.from(document.querySelectorAll('.twic-tab'));
-  let activePanel = toolTabs[0]?.dataset?.panel || 'text';
+  let openOverlayPanel = toolTabs[0]?.dataset?.panel || 'text';
   const textOpts = document.getElementById('textOpts');
   const natoOpts = document.getElementById('natoOpts');
   const weaponOpts = document.getElementById('weaponOpts');
@@ -576,7 +576,7 @@
   function beginSinglePlacement(mode){
     if(!mode) return;
     measurementCancel?.();
-    setActivePanel(mode);
+    setOpenOverlayPanel(mode);
     singlePlacementActive = true;
     singlePlacementMode = mode;
     syncToolPanels();
@@ -608,11 +608,11 @@
   btnPlaceManeuver?.addEventListener('click', () => beginSinglePlacement('maneuver'));
 
   function syncToolPanels(){
-    toolTabs.forEach(btn => btn.classList.toggle('active', btn.dataset.panel === activePanel));
-    textOpts.style.display = (activePanel === 'text') ? '' : 'none';
-    natoOpts.style.display = (activePanel === 'nato') ? '' : 'none';
-    weaponOpts.style.display = (activePanel === 'weaponRange') ? '' : 'none';
-    maneuverOpts.style.display = (activePanel === 'maneuver') ? '' : 'none';
+    toolTabs.forEach(btn => btn.classList.toggle('active', btn.dataset.panel === openOverlayPanel));
+    textOpts.style.display = (openOverlayPanel === 'text') ? '' : 'none';
+    natoOpts.style.display = (openOverlayPanel === 'nato') ? '' : 'none';
+    weaponOpts.style.display = (openOverlayPanel === 'weaponRange') ? '' : 'none';
+    maneuverOpts.style.display = (openOverlayPanel === 'maneuver') ? '' : 'none';
     const maneuverActive = (singlePlacementActive && singlePlacementMode === 'maneuver');
     const placementActive = singlePlacementActive && !maneuverActive;
     setOverlayPointerPassthrough('maneuver', maneuverActive);
@@ -621,9 +621,9 @@
     updateMapCursor();
   }
 
-  function setActivePanel(panel){
+  function setOpenOverlayPanel(panel){
     if(!panel) return;
-    activePanel = panel;
+    openOverlayPanel = panel;
     syncToolPanels();
   }
 
@@ -631,7 +631,7 @@
     btn.addEventListener('click', () => {
       if(btn.dataset?.panel){
         cancelSinglePlacement();
-        setActivePanel(btn.dataset.panel);
+        setOpenOverlayPanel(btn.dataset.panel);
       }
     });
   });
