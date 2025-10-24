@@ -487,6 +487,7 @@
   const pendingRangeAttachments = new Map();
   const pendingTextAttachments = new Map();
   const anchoredTextLayers = new Set();
+  const weaponRangeLayers = new Set();
 
   function generateOverlayId(kind='overlay'){
     if(window.crypto?.randomUUID) return crypto.randomUUID();
@@ -497,11 +498,77 @@
     if(marker._attachmentHandler) return;
     marker._attachmentHandler = () => {
       const latlng = marker.getLatLng();
-      marker._attachedRanges?.forEach(range => range.setLatLng(latlng));
+      marker._attachedRanges?.forEach(range => {
+        range.setLatLng(latlng);
+        updateRangeHandlePosition(range);
+      });
       marker._attachedTexts?.forEach(textLayer => syncAnchoredTextPosition(textLayer, marker));
     };
     marker.on('drag', marker._attachmentHandler);
     marker.on('move', marker._attachmentHandler);
+  }
+
+  function ensureRangeHandle(range){
+    if(!range) return null;
+    if(range._selectionHandle){
+      weaponRangeLayers.add(range);
+      updateRangeHandlePosition(range);
+      return range._selectionHandle;
+    }
+    const handle = L.circleMarker(range.getLatLng(), {
+      radius: 4,
+      color: '#111827',
+      weight: 1,
+      fillColor: '#ffffff',
+      fillOpacity: 1,
+      interactive: true
+    });
+    handle._parentRange = range;
+    range._selectionHandle = handle;
+    weaponRangeLayers.add(range);
+    handle.addTo(overlayLayer);
+    handle.on('click', e => {
+      selectLayer(range);
+      stopLeafletEvent(e);
+    });
+    handle.on('mousedown', stopLeafletEvent);
+    handle.on('touchstart', stopLeafletEvent);
+    updateRangeHandlePosition(range);
+    return handle;
+  }
+
+  function updateRangeHandlePosition(range){
+    if(!range?._selectionHandle) return;
+    const center = range.getLatLng?.();
+    if(!center) return;
+    let target = null;
+    if(map?.latLngToLayerPoint && map?.layerPointToLatLng){
+      const centerPoint = map.latLngToLayerPoint(center);
+      const radiusPx = Number.isFinite(range._radius) ? range._radius : null;
+      if(radiusPx !== null){
+        const handlePoint = centerPoint.add(L.point(radiusPx, 0));
+        target = map.layerPointToLatLng(handlePoint);
+      }
+    }
+    if(!target){
+      const radius = range.getRadius?.();
+      if(Number.isFinite(radius)) target = L.latLng(center.lat, center.lng + radius);
+    }
+    if(!target) target = center;
+    range._selectionHandle.setLatLng(target);
+  }
+
+  function destroyRangeHandle(range){
+    if(!range) return;
+    weaponRangeLayers.delete(range);
+    const handle = range._selectionHandle;
+    if(!handle) return;
+    range._selectionHandle = null;
+    handle._parentRange = null;
+    if(overlayLayer.hasLayer(handle)) overlayLayer.removeLayer(handle);
+    handle.off('click');
+    handle.off('mousedown');
+    handle.off('touchstart');
   }
 
   function attachRangeToMarker(range, marker){
@@ -513,6 +580,8 @@
     range._attachedTo = marker;
     range.options.meta.attachedTo = markerId;
     range.setLatLng(marker.getLatLng());
+    ensureRangeHandle(range);
+    updateRangeHandlePosition(range);
     ensureMarkerAttachmentHandlers(marker);
   }
 
@@ -625,6 +694,7 @@
     }
     range._attachedTo = null;
     if(range.options?.meta) range.options.meta.attachedTo = null;
+    destroyRangeHandle(range);
     maybeCleanupMarkerAttachments(marker);
   }
 
@@ -671,6 +741,8 @@
     if(kind === 'nato'){
       registerMarker(layer);
     } else if(kind === 'weaponRange'){
+      ensureRangeHandle(layer);
+      updateRangeHandlePosition(layer);
       const anchorId = layer.options.meta.attachedTo;
       if(anchorId){
         const marker = overlayIndex.get(anchorId);
@@ -709,6 +781,7 @@
       const target = computeAnchoredLatLng(marker, offsetPx);
       if(target) textLayer.setLatLng(target);
     });
+    weaponRangeLayers.forEach(range => updateRangeHandlePosition(range));
   });
 
   function capturePathStyle(layer){
@@ -1076,6 +1149,7 @@
     circle.options.meta = { kind:'weaponRange', radiusNm, color: stroke, fillColor: fill, fillOpacity, attachedTo };
     circle.addTo(overlayLayer);
     attachSelectablePath(circle);
+    ensureRangeHandle(circle);
     maybeCompleteSinglePlacement('weaponRange');
     return circle;
   }
@@ -1282,6 +1356,7 @@
         circle.options.meta = { kind:'weaponRange', radiusNm, color, fillColor, fillOpacity: normalizedFill, attachedTo };
         circle.addTo(overlayLayer);
         attachSelectablePath(circle);
+        ensureRangeHandle(circle);
         return;
       }
 
