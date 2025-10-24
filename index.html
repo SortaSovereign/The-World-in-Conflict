@@ -147,7 +147,8 @@
         </select>
       </div>
       <div class="twic-muted">Click start and end points to draw a line of maneuver.</div>
-      <div style="display:flex; justify-content:flex-end; margin-top:6px;">
+      <div style="display:flex; justify-content:flex-end; gap:6px; margin-top:6px; flex-wrap:wrap;">
+        <button class="twic-btn" type="button" id="btnExecuteManeuver">Execute</button>
         <button class="twic-btn" type="button" id="btnPlaceManeuver">Place Maneuver</button>
       </div>
     </div>
@@ -481,11 +482,12 @@
   /* ===== Overlay: text + simplified NATO symbols (frame/fill only) ===== */
   const overlayLayer = L.layerGroup().addTo(map);
   let selected = null;
-  let maneuverStart = null, maneuverGuide = null, maneuverGuideTooltip = null;
+  let maneuverStart = null, maneuverStartAnchor = null, maneuverGuide = null, maneuverGuideTooltip = null;
 
   const overlayIndex = new Map();
   const pendingRangeAttachments = new Map();
   const pendingTextAttachments = new Map();
+  const pendingManeuverAttachments = new Map();
   const anchoredTextLayers = new Set();
   const weaponRangeLayers = new Set();
 
@@ -498,11 +500,30 @@
     if(marker._attachmentHandler) return;
     marker._attachmentHandler = () => {
       const latlng = marker.getLatLng();
-      marker._attachedRanges?.forEach(range => {
-        range.setLatLng(latlng);
-        updateRangeHandlePosition(range);
-      });
+      if(marker === maneuverStartAnchor){
+        maneuverStart = latlng;
+        if(maneuverGuide){
+          const guideLatLngs = maneuverGuide.getLatLngs?.() || [];
+          const endLatLng = guideLatLngs[guideLatLngs.length - 1] || latlng;
+          maneuverGuide.setLatLngs([latlng, endLatLng]);
+        }
+        if(maneuverGuideTooltip){
+          maneuverGuideTooltip.setLatLng(latlng);
+        }
+      }
+      marker._attachedRanges?.forEach(range => range.setLatLng(latlng));
       marker._attachedTexts?.forEach(textLayer => syncAnchoredTextPosition(textLayer, marker));
+      if(marker._attachedManeuvers instanceof Map){
+        marker._attachedManeuvers.forEach((role, polyline) => {
+          if(!polyline?.getLatLngs) return;
+          const latlngs = polyline.getLatLngs();
+          if(!Array.isArray(latlngs) || latlngs.length < 2) return;
+          if(role === 'start') latlngs[0] = latlng;
+          else latlngs[latlngs.length - 1] = latlng;
+          polyline.setLatLngs(latlngs);
+          refreshManeuverLengthLabel(polyline);
+        });
+      }
     };
     marker.on('drag', marker._attachmentHandler);
     marker.on('move', marker._attachmentHandler);
@@ -648,13 +669,86 @@
     pendingTextAttachments.set(markerId, list);
   }
 
+  function queueManeuverForMarker(polyline, markerId, role){
+    if(!markerId || !polyline || !role) return;
+    const list = pendingManeuverAttachments.get(markerId) || [];
+    list.push({ polyline, role });
+    pendingManeuverAttachments.set(markerId, list);
+  }
+
+  function removeQueuedManeuverAttachment(markerId, polyline, role){
+    if(!markerId) return;
+    const list = pendingManeuverAttachments.get(markerId);
+    if(!list) return;
+    const next = list.filter(item => item.polyline !== polyline || item.role !== role);
+    if(next.length) pendingManeuverAttachments.set(markerId, next);
+    else pendingManeuverAttachments.delete(markerId);
+  }
+
+  function attachManeuverAnchor(polyline, marker, role){
+    if(!polyline || !marker || !role) return;
+    const meta = polyline.options?.meta || (polyline.options.meta = { kind:'maneuver' });
+    const markerMeta = marker.options.meta || (marker.options.meta = { kind:'nato' });
+    if(!markerMeta.id) markerMeta.id = generateOverlayId('nato');
+    const markerId = markerMeta.id;
+    if(role === 'start') meta.startAnchorId = markerId;
+    else if(role === 'end') meta.endAnchorId = markerId;
+    if(!polyline._maneuverAnchors) polyline._maneuverAnchors = {};
+    polyline._maneuverAnchors[role] = marker;
+    if(!marker._attachedManeuvers) marker._attachedManeuvers = new Map();
+    marker._attachedManeuvers.set(polyline, role);
+    const latlngs = polyline.getLatLngs?.();
+    const anchorLatLng = marker.getLatLng?.();
+    if(Array.isArray(latlngs) && latlngs.length >= 2 && anchorLatLng){
+      if(role === 'start') latlngs[0] = anchorLatLng;
+      else latlngs[latlngs.length - 1] = anchorLatLng;
+      polyline.setLatLngs(latlngs);
+      refreshManeuverLengthLabel(polyline);
+    }
+    ensureMarkerAttachmentHandlers(marker);
+    removeQueuedManeuverAttachment(markerId, polyline, role);
+  }
+
+  function detachManeuverAnchor(polyline, role){
+    if(!polyline || !role) return;
+    const meta = polyline.options?.meta || {};
+    const anchors = polyline._maneuverAnchors || {};
+    const marker = anchors[role] || null;
+    const markerIdFromMeta = role === 'start' ? meta.startAnchorId : meta.endAnchorId;
+    if(marker?._attachedManeuvers instanceof Map){
+      marker._attachedManeuvers.delete(polyline);
+    }
+    if(markerIdFromMeta) removeQueuedManeuverAttachment(markerIdFromMeta, polyline, role);
+    if(marker?.options?.meta?.id) removeQueuedManeuverAttachment(marker.options.meta.id, polyline, role);
+    if(role === 'start') meta.startAnchorId = null;
+    else if(role === 'end') meta.endAnchorId = null;
+    if(polyline._maneuverAnchors){
+      delete polyline._maneuverAnchors[role];
+      if(!Object.keys(polyline._maneuverAnchors).length) delete polyline._maneuverAnchors;
+    }
+    maybeCleanupMarkerAttachments(marker);
+  }
+
+  function detachManeuver(polyline){
+    if(!polyline) return;
+    detachManeuverAnchor(polyline, 'start');
+    detachManeuverAnchor(polyline, 'end');
+    Array.from(pendingManeuverAttachments.entries()).forEach(([markerId, list]) => {
+      const next = list.filter(item => item.polyline !== polyline);
+      if(next.length) pendingManeuverAttachments.set(markerId, next);
+      else pendingManeuverAttachments.delete(markerId);
+    });
+  }
+
   function maybeCleanupMarkerAttachments(marker){
     if(!marker) return;
     const hasRanges = marker._attachedRanges && marker._attachedRanges.size > 0;
     const hasTexts = marker._attachedTexts && marker._attachedTexts.size > 0;
+    const hasManeuvers = marker._attachedManeuvers instanceof Map && marker._attachedManeuvers.size > 0;
     if(!hasRanges) delete marker._attachedRanges;
     if(!hasTexts) delete marker._attachedTexts;
-    if(!hasRanges && !hasTexts && marker._attachmentHandler){
+    if(!hasManeuvers) delete marker._attachedManeuvers;
+    if(!hasRanges && !hasTexts && !hasManeuvers && marker._attachmentHandler){
       marker.off('drag', marker._attachmentHandler);
       marker.off('move', marker._attachmentHandler);
       marker._attachmentHandler = null;
@@ -675,6 +769,11 @@
     if(queuedText){
       queuedText.forEach(textLayer => attachTextToMarker(textLayer, layer));
       pendingTextAttachments.delete(id);
+    }
+    const queuedManeuvers = pendingManeuverAttachments.get(id);
+    if(queuedManeuvers){
+      queuedManeuvers.forEach(({ polyline, role }) => attachManeuverAnchor(polyline, layer, role));
+      pendingManeuverAttachments.delete(id);
     }
   }
 
@@ -732,6 +831,11 @@
         overlayLayer.removeLayer(textLayer);
       });
     }
+    if(layer._attachedManeuvers instanceof Map){
+      [...layer._attachedManeuvers.entries()].forEach(([polyline, role]) => {
+        detachManeuverAnchor(polyline, role);
+      });
+    }
     maybeCleanupMarkerAttachments(layer);
   }
 
@@ -756,6 +860,21 @@
         if(marker) attachTextToMarker(layer, marker);
         else queueTextForMarker(layer, anchorId);
       }
+    } else if(kind === 'maneuver'){
+      const meta = layer.options.meta || {};
+      const startAnchorId = meta.startAnchorId || null;
+      const endAnchorId = meta.endAnchorId || null;
+      if(startAnchorId && (!layer._maneuverAnchors || !layer._maneuverAnchors.start)){
+        const marker = overlayIndex.get(startAnchorId);
+        if(marker) attachManeuverAnchor(layer, marker, 'start');
+        else queueManeuverForMarker(layer, startAnchorId, 'start');
+      }
+      if(endAnchorId && (!layer._maneuverAnchors || !layer._maneuverAnchors.end)){
+        const marker = overlayIndex.get(endAnchorId);
+        if(marker) attachManeuverAnchor(layer, marker, 'end');
+        else queueManeuverForMarker(layer, endAnchorId, 'end');
+      }
+      attachManeuverLengthLabel(layer);
     }
   });
 
@@ -769,7 +888,7 @@
     } else if(kind === 'text'){
       detachText(layer);
     } else if(kind === 'maneuver'){
-      removeManeuverHandle(layer);
+      detachManeuver(layer);
     }
   });
 
@@ -847,6 +966,7 @@
   }
   function resetManeuverDraft(){
     maneuverStart = null;
+    maneuverStartAnchor = null;
     if(maneuverGuide){ map.removeLayer(maneuverGuide); maneuverGuide=null; }
     if(maneuverGuideTooltip){ map.removeLayer(maneuverGuideTooltip); maneuverGuideTooltip=null; }
   }
@@ -872,6 +992,7 @@
   const btnPlaceText = document.getElementById('btnPlaceText');
   const btnPlaceNato = document.getElementById('btnPlaceNato');
   const btnPlaceRange = document.getElementById('btnPlaceRange');
+  const btnExecuteManeuver = document.getElementById('btnExecuteManeuver');
   const btnPlaceManeuver = document.getElementById('btnPlaceManeuver');
 
   function beginSinglePlacement(mode){
@@ -906,6 +1027,7 @@
   btnPlaceText?.addEventListener('click', () => beginSinglePlacement('text'));
   btnPlaceNato?.addEventListener('click', () => beginSinglePlacement('nato'));
   btnPlaceRange?.addEventListener('click', () => beginSinglePlacement('weaponRange'));
+  btnExecuteManeuver?.addEventListener('click', executeManeuvers);
   btnPlaceManeuver?.addEventListener('click', () => beginSinglePlacement('maneuver'));
 
   function syncToolPanels(){
@@ -1095,7 +1217,7 @@
         return;
       }
       if(mode === 'maneuver'){
-        handleManeuverClick(m.getLatLng());
+        handleManeuverClick(m.getLatLng(), m);
         e.originalEvent?.stopPropagation?.();
         return;
       }
@@ -1153,42 +1275,165 @@
     maybeCompleteSinglePlacement('weaponRange');
     return circle;
   }
-  function handleManeuverClick(p){
+  function handleManeuverClick(p, anchorMarker=null){
     const color = maneuverColor.value || '#2563eb';
     const weight = +maneuverWidth.value || 3;
     const dashArray = dashPatternFromValue(maneuverDash.value);
+    if(anchorMarker){
+      const meta = anchorMarker.options.meta || (anchorMarker.options.meta = { kind:'nato' });
+      if(!meta.id) meta.id = generateOverlayId('nato');
+    }
     if(!maneuverStart){
-      maneuverStart = p;
-      maneuverGuide = L.polyline([p,p], { color, weight, dashArray, opacity:0.6, interactive:false }).addTo(map);
+      const startLatLng = anchorMarker?.getLatLng?.() || p;
+      maneuverStart = startLatLng;
+      maneuverStartAnchor = anchorMarker || null;
+      maneuverGuide = L.polyline([startLatLng,startLatLng], { color, weight, dashArray, opacity:0.6, interactive:false }).addTo(map);
       maneuverGuideTooltip = L.tooltip({
         permanent: true,
         direction: 'center',
         className: 'twic-badge twic-badge--maneuver',
         offset: [0, 0],
         opacity: 1
-      }).setContent(formatNauticalMiles(0)).setLatLng(p).addTo(map);
+      }).setContent(formatNauticalMiles(0)).setLatLng(startLatLng).addTo(map);
     } else {
-      const latlngs = [maneuverStart, p];
-      const poly = L.polyline(latlngs, { color, weight, dashArray }).addTo(overlayLayer);
-      poly.options.meta = { kind:'maneuver', color, weight, dashArray };
+      const startLatLng = maneuverStartAnchor?.getLatLng?.() || maneuverStart;
+      const endMarker = anchorMarker || null;
+      const endLatLng = endMarker?.getLatLng?.() || p;
+      const latlngs = [startLatLng, endLatLng];
+      const poly = L.polyline(latlngs, { color, weight, dashArray });
+      const meta = { kind:'maneuver', color, weight, dashArray, startAnchorId: null, endAnchorId: null };
+      if(maneuverStartAnchor){
+        const startMeta = maneuverStartAnchor.options.meta || (maneuverStartAnchor.options.meta = { kind:'nato' });
+        if(!startMeta.id) startMeta.id = generateOverlayId('nato');
+        meta.startAnchorId = startMeta.id;
+      }
+      if(endMarker){
+        const endMeta = endMarker.options.meta || (endMarker.options.meta = { kind:'nato' });
+        if(!endMeta.id) endMeta.id = generateOverlayId('nato');
+        meta.endAnchorId = endMeta.id;
+      }
+      poly.options.meta = meta;
+      poly.addTo(overlayLayer);
       attachSelectablePath(poly);
-      decorateManeuverPolyline(poly);
+      attachManeuverLengthLabel(poly);
+      if(maneuverStartAnchor) attachManeuverAnchor(poly, maneuverStartAnchor, 'start');
+      if(endMarker) attachManeuverAnchor(poly, endMarker, 'end');
       resetManeuverDraft();
       maybeCompleteSinglePlacement('maneuver');
     }
   }
   map.on('mousemove', e => {
     if(maneuverStart && maneuverGuide){
-      maneuverGuide.setLatLngs([maneuverStart, e.latlng]);
+      const startLatLng = maneuverStartAnchor?.getLatLng?.() || maneuverStart;
+      maneuverGuide.setLatLngs([startLatLng, e.latlng]);
       if(maneuverGuideTooltip){
-        const midpoint = midpointLatLng(maneuverStart, e.latlng);
+        const midpoint = midpointLatLng(startLatLng, e.latlng);
         if(midpoint){
-          const lengthNm = computeLineLengthNm(maneuverStart, e.latlng);
+          const lengthNm = computeLineLengthNm(startLatLng, e.latlng);
           maneuverGuideTooltip.setLatLng(midpoint).setContent(formatNauticalMiles(lengthNm));
         }
       }
     }
   });
+
+  function easeInOut(t){
+    if(t < 0.5) return 2 * t * t;
+    return -1 + (4 - 2 * t) * t;
+  }
+
+  function animateMarkerTo(marker, targetLatLng, duration=1200){
+    if(!marker?.getLatLng || !targetLatLng) return Promise.resolve();
+    const startLatLng = marker.getLatLng();
+    if(!startLatLng) return Promise.resolve();
+    const start = L.latLng(startLatLng);
+    const end = L.latLng(targetLatLng);
+    if(!Number.isFinite(start.lat) || !Number.isFinite(start.lng) ||
+       !Number.isFinite(end.lat)   || !Number.isFinite(end.lng)){
+      return Promise.resolve();
+    }
+    if(start.lat === end.lat && start.lng === end.lng) return Promise.resolve();
+    const existing = activeMarkerAnimations.get(marker);
+    if(existing?.cancel) existing.cancel();
+    if(typeof requestAnimationFrame !== 'function' || typeof cancelAnimationFrame !== 'function'){
+      marker.setLatLng([end.lat, end.lng]);
+      return Promise.resolve();
+    }
+    return new Promise(resolve => {
+      const state = { cancel: null, cancelled: false, rafId: null };
+      const nowFn = (typeof performance !== 'undefined' && performance.now) ? () => performance.now() : () => Date.now();
+      const startTime = nowFn();
+      const durationMs = Math.max(0, Number(duration) || 0);
+      const onRemove = () => state.cancel?.();
+      marker.once('remove', onRemove);
+
+      function finish(){
+        if(state.cancelled) return;
+        marker.off('remove', onRemove);
+        activeMarkerAnimations.delete(marker);
+        marker.setLatLng([end.lat, end.lng]);
+        resolve();
+      }
+
+      function step(now){
+        if(state.cancelled) return;
+        const current = typeof now === 'number' ? now : nowFn();
+        const elapsed = current - startTime;
+        const linearT = durationMs > 0 ? Math.min(1, elapsed / durationMs) : 1;
+        const t = easeInOut(linearT);
+        const lat = start.lat + (end.lat - start.lat) * t;
+        const lng = start.lng + (end.lng - start.lng) * t;
+        marker.setLatLng([lat, lng]);
+        if(linearT < 1){
+          state.rafId = requestAnimationFrame(step);
+        } else {
+          finish();
+        }
+      }
+
+      state.cancel = () => {
+        if(state.cancelled) return;
+        state.cancelled = true;
+        if(state.rafId) cancelAnimationFrame(state.rafId);
+        marker.off('remove', onRemove);
+        activeMarkerAnimations.delete(marker);
+        resolve();
+      };
+
+      activeMarkerAnimations.set(marker, state);
+      state.rafId = requestAnimationFrame(step);
+    });
+  }
+
+  function executeManeuvers(){
+    resetManeuverDraft();
+    const markerTargets = new Map();
+    overlayLayer.eachLayer(layer => {
+      if(layer?.options?.meta?.kind !== 'maneuver') return;
+      const latlngs = layer.getLatLngs?.();
+      if(!Array.isArray(latlngs) || latlngs.length < 2) return;
+      const startLatLng = latlngs[0];
+      const endLatLng = latlngs[latlngs.length - 1];
+      const meta = layer.options.meta || {};
+      let startMarker = layer._maneuverAnchors?.start || null;
+      if(!startMarker && meta.startAnchorId) startMarker = overlayIndex.get(meta.startAnchorId) || null;
+      let endMarker = layer._maneuverAnchors?.end || null;
+      if(!endMarker && meta.endAnchorId) endMarker = overlayIndex.get(meta.endAnchorId) || null;
+      if(startMarker && !markerTargets.has(startMarker)){
+        markerTargets.set(startMarker, L.latLng(endLatLng));
+      }
+      if(endMarker && !markerTargets.has(endMarker)){
+        markerTargets.set(endMarker, L.latLng(startLatLng));
+      }
+    });
+    if(!markerTargets.size) return;
+    const animations = [];
+    markerTargets.forEach((target, marker) => {
+      animations.push(animateMarkerTo(marker, target));
+    });
+    return Promise.allSettled(animations).then(() => {
+      if(typeof saveOverlays === 'function') saveOverlays();
+    });
+  }
   document.addEventListener('keydown', e => {
     if(e.key !== 'Escape') return;
     if(singlePlacementMode === 'maneuver') resetManeuverDraft();
@@ -1226,7 +1471,7 @@
       if(anchor) dropWeaponRangeForMarker(anchor);
       else addWeaponRangeAt(e.latlng);
     }
-    else if (singlePlacementMode === 'maneuver') handleManeuverClick(e.latlng);
+    else if (singlePlacementMode === 'maneuver') handleManeuverClick(e.latlng, null);
   });
 
   document.getElementById('btnDelete').onclick = () => { if (selected) { overlayLayer.removeLayer(selected); selected=null; } };
@@ -1256,7 +1501,9 @@
             kind:'maneuver',
             color: layer.options.meta.color,
             weight: layer.options.meta.weight,
-            dashArray: layer.options.meta.dashArray || ''
+            dashArray: layer.options.meta.dashArray || '',
+            startAnchorId: layer.options.meta.startAnchorId || null,
+            endAnchorId: layer.options.meta.endAnchorId || null
           }
         });
         return;
@@ -1349,11 +1596,22 @@
         const coords = Array.isArray(f.geometry.coordinates) ? f.geometry.coordinates : [];
         const latlngs = coords.map(pt => L.latLng(pt[1], pt[0])).filter(ll => Number.isFinite(ll.lat) && Number.isFinite(ll.lng));
         if (latlngs.length < 2) return;
-        const { color='#2563eb', weight=3, dashArray='' } = f.properties || {};
-        const poly = L.polyline(latlngs, { color, weight, dashArray }).addTo(overlayLayer);
-        poly.options.meta = { kind:'maneuver', color, weight, dashArray };
+        const { color='#2563eb', weight=3, dashArray='', startAnchorId=null, endAnchorId=null } = f.properties || {};
+        const poly = L.polyline(latlngs, { color, weight, dashArray });
+        poly.options.meta = { kind:'maneuver', color, weight, dashArray, startAnchorId, endAnchorId };
+        poly.addTo(overlayLayer);
         attachSelectablePath(poly);
-        decorateManeuverPolyline(poly);
+        attachManeuverLengthLabel(poly);
+        if(startAnchorId){
+          const marker = overlayIndex.get(startAnchorId);
+          if(marker) attachManeuverAnchor(poly, marker, 'start');
+          else queueManeuverForMarker(poly, startAnchorId, 'start');
+        }
+        if(endAnchorId){
+          const marker = overlayIndex.get(endAnchorId);
+          if(marker) attachManeuverAnchor(poly, marker, 'end');
+          else queueManeuverForMarker(poly, endAnchorId, 'end');
+        }
         return;
       }
 
@@ -1422,7 +1680,7 @@
             return;
           }
           if(mode === 'maneuver'){
-            handleManeuverClick(mk.getLatLng());
+            handleManeuverClick(mk.getLatLng(), mk);
             e.originalEvent?.stopPropagation?.();
             return;
           }
