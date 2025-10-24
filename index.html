@@ -222,8 +222,9 @@
     const maneuverOnly = (overlayPointerLocks.size === 1 && overlayPointerLocks.has('maneuver'));
     const placementLock = overlayPointerLocks.has('placement');
     const weaponRangePlacement = placementLock && singlePlacementMode === 'weaponRange';
+    const textPlacement = placementLock && singlePlacementMode === 'text';
     const overlayValue = hasLocks ? 'none' : '';
-    const markerLocked = hasLocks && !maneuverOnly && !weaponRangePlacement;
+    const markerLocked = hasLocks && !maneuverOnly && !weaponRangePlacement && !textPlacement;
     const markerValue = markerLocked ? 'none' : '';
     if(overlayPane) overlayPane.style.pointerEvents = overlayValue;
     if(markerPane) markerPane.style.pointerEvents = markerValue;
@@ -400,6 +401,8 @@
 
   const overlayIndex = new Map();
   const pendingRangeAttachments = new Map();
+  const pendingTextAttachments = new Map();
+  const anchoredTextLayers = new Set();
 
   function generateOverlayId(kind='overlay'){
     if(window.crypto?.randomUUID) return crypto.randomUUID();
@@ -407,12 +410,14 @@
   }
 
   function ensureMarkerAttachmentHandlers(marker){
-    if(marker._rangeDragHandler) return;
-    marker._rangeDragHandler = () => {
+    if(marker._attachmentHandler) return;
+    marker._attachmentHandler = () => {
       const latlng = marker.getLatLng();
       marker._attachedRanges?.forEach(range => range.setLatLng(latlng));
+      marker._attachedTexts?.forEach(textLayer => syncAnchoredTextPosition(textLayer, marker));
     };
-    marker.on('drag', marker._rangeDragHandler);
+    marker.on('drag', marker._attachmentHandler);
+    marker.on('move', marker._attachmentHandler);
   }
 
   function attachRangeToMarker(range, marker){
@@ -434,6 +439,75 @@
     pendingRangeAttachments.set(markerId, list);
   }
 
+  function normalizeOffsetPx(offset){
+    if(Array.isArray(offset) && offset.length >= 2){
+      const [x,y] = offset;
+      return [Number.isFinite(+x) ? +x : 0, Number.isFinite(+y) ? +y : 0];
+    }
+    return [0,0];
+  }
+
+  function computeAnchoredLatLng(marker, offsetPx=[0,0]){
+    if(!marker?.getLatLng) return null;
+    const markerLatLng = marker.getLatLng();
+    if(!map?.latLngToLayerPoint || !map?.layerPointToLatLng) return markerLatLng;
+    const markerPoint = map.latLngToLayerPoint(markerLatLng);
+    const [dx,dy] = normalizeOffsetPx(offsetPx);
+    const anchorPoint = markerPoint.add(L.point(dx, dy));
+    return map.layerPointToLatLng(anchorPoint);
+  }
+
+  function syncAnchoredTextPosition(textLayer, marker){
+    const offsetPx = textLayer.options?.meta?.offsetPx;
+    if(!offsetPx) return;
+    const target = computeAnchoredLatLng(marker, offsetPx);
+    if(target) textLayer.setLatLng(target);
+  }
+
+  function attachTextToMarker(textLayer, marker){
+    if(!textLayer || !marker) return;
+    const markerId = marker.options?.meta?.id;
+    if(!markerId) return;
+    let offsetPx = textLayer.options?.meta?.offsetPx;
+    if((!offsetPx || !Array.isArray(offsetPx)) && map?.latLngToLayerPoint && textLayer.getLatLng){
+      const markerPoint = map.latLngToLayerPoint(marker.getLatLng());
+      const textPoint = map.latLngToLayerPoint(textLayer.getLatLng());
+      if(markerPoint && textPoint){
+        offsetPx = [textPoint.x - markerPoint.x, textPoint.y - markerPoint.y];
+      }
+    }
+    const normalizedOffset = normalizeOffsetPx(offsetPx || [0,0]);
+    textLayer.options.meta.attachedTo = markerId;
+    textLayer.options.meta.offsetPx = normalizedOffset;
+    if(!marker._attachedTexts) marker._attachedTexts = new Set();
+    marker._attachedTexts.add(textLayer);
+    textLayer._attachedTo = marker;
+    anchoredTextLayers.add(textLayer);
+    const target = computeAnchoredLatLng(marker, normalizedOffset);
+    if(target) textLayer.setLatLng(target);
+    ensureMarkerAttachmentHandlers(marker);
+  }
+
+  function queueTextForMarker(textLayer, markerId){
+    if(!markerId) return;
+    const list = pendingTextAttachments.get(markerId) || [];
+    list.push(textLayer);
+    pendingTextAttachments.set(markerId, list);
+  }
+
+  function maybeCleanupMarkerAttachments(marker){
+    if(!marker) return;
+    const hasRanges = marker._attachedRanges && marker._attachedRanges.size > 0;
+    const hasTexts = marker._attachedTexts && marker._attachedTexts.size > 0;
+    if(!hasRanges) delete marker._attachedRanges;
+    if(!hasTexts) delete marker._attachedTexts;
+    if(!hasRanges && !hasTexts && marker._attachmentHandler){
+      marker.off('drag', marker._attachmentHandler);
+      marker.off('move', marker._attachmentHandler);
+      marker._attachmentHandler = null;
+    }
+  }
+
   function registerMarker(layer){
     if(!layer.options.meta) layer.options.meta = { kind:'nato' };
     if(!layer.options.meta.id) layer.options.meta.id = generateOverlayId('nato');
@@ -443,6 +517,11 @@
     if(queued){
       queued.forEach(range => attachRangeToMarker(range, layer));
       pendingRangeAttachments.delete(id);
+    }
+    const queuedText = pendingTextAttachments.get(id);
+    if(queuedText){
+      queuedText.forEach(textLayer => attachTextToMarker(textLayer, layer));
+      pendingTextAttachments.delete(id);
     }
   }
 
@@ -459,16 +538,30 @@
     const marker = range._attachedTo;
     if(marker?._attachedRanges){
       marker._attachedRanges.delete(range);
-      if(marker._attachedRanges.size === 0){
-        if(marker._rangeDragHandler){
-          marker.off('drag', marker._rangeDragHandler);
-          marker._rangeDragHandler = null;
-        }
-        delete marker._attachedRanges;
-      }
     }
     range._attachedTo = null;
     if(range.options?.meta) range.options.meta.attachedTo = null;
+    maybeCleanupMarkerAttachments(marker);
+  }
+
+  function detachText(textLayer){
+    const anchorId = textLayer.options?.meta?.attachedTo || null;
+    if(anchorId && !textLayer._attachedTo){
+      const pending = pendingTextAttachments.get(anchorId);
+      if(pending){
+        const next = pending.filter(item => item !== textLayer);
+        if(next.length) pendingTextAttachments.set(anchorId, next);
+        else pendingTextAttachments.delete(anchorId);
+      }
+    }
+    const marker = textLayer._attachedTo;
+    if(marker?._attachedTexts){
+      marker._attachedTexts.delete(textLayer);
+    }
+    textLayer._attachedTo = null;
+    if(textLayer.options?.meta) textLayer.options.meta.attachedTo = null;
+    anchoredTextLayers.delete(textLayer);
+    maybeCleanupMarkerAttachments(marker);
   }
 
   function unregisterMarker(layer){
@@ -480,6 +573,12 @@
         overlayLayer.removeLayer(range);
       });
     }
+    if(layer._attachedTexts){
+      [...layer._attachedTexts].forEach(textLayer => {
+        overlayLayer.removeLayer(textLayer);
+      });
+    }
+    maybeCleanupMarkerAttachments(layer);
   }
 
   overlayLayer.on('layeradd', e => {
@@ -494,6 +593,13 @@
         if(marker) attachRangeToMarker(layer, marker);
         else queueRangeForMarker(layer, anchorId);
       }
+    } else if(kind === 'text'){
+      const anchorId = layer.options.meta?.attachedTo;
+      if(anchorId){
+        const marker = overlayIndex.get(anchorId);
+        if(marker) attachTextToMarker(layer, marker);
+        else queueTextForMarker(layer, anchorId);
+      }
     }
   });
 
@@ -504,7 +610,19 @@
       unregisterMarker(layer);
     } else if(kind === 'weaponRange'){
       detachRange(layer);
+    } else if(kind === 'text'){
+      detachText(layer);
     }
+  });
+
+  map.on('zoom', () => {
+    anchoredTextLayers.forEach(textLayer => {
+      const marker = textLayer._attachedTo;
+      const offsetPx = textLayer.options?.meta?.offsetPx;
+      if(!marker || !offsetPx) return;
+      const target = computeAnchoredLatLng(marker, offsetPx);
+      if(target) textLayer.setLatLng(target);
+    });
   });
 
   function capturePathStyle(layer){
@@ -650,23 +768,91 @@
     const html = `<div class="twic-text" style="font-size:${s}px;color:${c};background:${bg};border-color:${bo};">${t.replace(/</g,'&lt;')}</div>`;
     return L.divIcon({ className:'', html, iconSize:null });
   }
-  function addTextAt(p){
-    const t = txtText.value || 'Label';
-    const s = +txtSize.value || 12;
-    const c = txtColor.value;
-    const bg= txtBg.value;
-    const b = txtBorder.value;
-    const m = L.marker(p, { icon: makeTextDivIcon(t,s,c,bg,b), draggable:true }).addTo(overlayLayer);
-    m.on('click', e => {
+
+  function bindTextMarkerEvents(marker){
+    if(!marker) return;
+    marker.on('click', e => {
       if(measurementActive){
         measurementHandlePoint?.(e.latlng);
         e.originalEvent?.stopPropagation?.();
         return;
       }
-      selectLayer(m); e.originalEvent.stopPropagation();
+      selectLayer(marker); e.originalEvent.stopPropagation();
     });
-    m.on('dragstart', clearSelection);
+    marker.on('dragstart', clearSelection);
+    marker.on('dragend', () => {
+      updateAnchoredTextOffsetFromPosition(marker);
+    });
+  }
+
+  function defaultTextAnchorOffset(marker){
+    const iconSize = marker?.options?.icon?.options?.iconSize;
+    let width = 36;
+    if(Array.isArray(iconSize) && iconSize.length){
+      width = Number(iconSize[0]) || width;
+    } else if(Number.isFinite(iconSize)){
+      width = Number(iconSize) || width;
+    }
+    return [Math.round(width / 2 + 12), 0];
+  }
+
+  function resolveAnchorMarker(anchorMeta){
+    if(!anchorMeta) return null;
+    if(anchorMeta.marker) return anchorMeta.marker;
+    const markerId = anchorMeta.markerId;
+    if(markerId) return overlayIndex.get(markerId) || null;
+    return null;
+  }
+
+  function updateAnchoredTextOffsetFromPosition(textLayer){
+    const meta = textLayer?.options?.meta;
+    const anchorId = meta?.attachedTo;
+    if(!anchorId) return;
+    const marker = overlayIndex.get(anchorId) || textLayer._attachedTo;
+    if(!marker?.getLatLng) return;
+    if(!map?.latLngToLayerPoint) return;
+    const anchorPoint = map.latLngToLayerPoint(marker.getLatLng());
+    const textPoint = map.latLngToLayerPoint(textLayer.getLatLng());
+    if(!anchorPoint || !textPoint) return;
+    const dx = textPoint.x - anchorPoint.x;
+    const dy = textPoint.y - anchorPoint.y;
+    const offset = [dx, dy];
+    const normalized = normalizeOffsetPx(offset);
+    meta.offsetPx = normalized;
+    textLayer.options.meta = meta;
+    if(marker){
+      if(!marker._attachedTexts) marker._attachedTexts = new Set();
+      marker._attachedTexts.add(textLayer);
+      textLayer._attachedTo = marker;
+      anchoredTextLayers.add(textLayer);
+      ensureMarkerAttachmentHandlers(marker);
+    }
+  }
+
+  function addTextAt(p, anchorMeta=null){
+    const t = txtText.value || 'Label';
+    const s = +txtSize.value || 12;
+    const c = txtColor.value;
+    const bg= txtBg.value;
+    const b = txtBorder.value;
+    const meta = { kind:'text', text:t, size:s, color:c, bg, border:b };
+    let targetLatLng = p;
+    let anchorMarker = resolveAnchorMarker(anchorMeta);
+    let offsetPx = null;
+    if(anchorMarker){
+      if(!anchorMarker.options.meta) anchorMarker.options.meta = { kind:'nato' };
+      if(!anchorMarker.options.meta.id) anchorMarker.options.meta.id = generateOverlayId('nato');
+      offsetPx = normalizeOffsetPx(anchorMeta?.offsetPx || defaultTextAnchorOffset(anchorMarker));
+      meta.attachedTo = anchorMarker.options.meta.id;
+      meta.offsetPx = offsetPx;
+      const anchoredLatLng = computeAnchoredLatLng(anchorMarker, offsetPx);
+      if(anchoredLatLng) targetLatLng = anchoredLatLng;
+    }
+    const marker = L.marker(targetLatLng, { icon: makeTextDivIcon(t,s,c,bg,b), draggable:true }).addTo(overlayLayer);
+    marker.options.meta = meta;
+    bindTextMarkerEvents(marker);
     maybeCompleteSinglePlacement('text');
+    return marker;
   }
 
   /* NATO symbol mapping (Air/Surface/Ground/Subsurface × Friendly/Hostile/Neutral) */
@@ -726,6 +912,12 @@
         return;
       }
       const mode = singlePlacementActive ? singlePlacementMode : null;
+      if(mode === 'text'){
+        const offsetPx = defaultTextAnchorOffset(m);
+        addTextAt(m.getLatLng(), { marker: m, offsetPx });
+        e.originalEvent?.stopPropagation?.();
+        return;
+      }
       if(mode === 'maneuver'){
         handleManeuverClick(m.getLatLng());
         e.originalEvent?.stopPropagation?.();
@@ -895,16 +1087,37 @@
 
       if (!layer.getLatLng) return;
       const p = layer.getLatLng();
+
+      if (layer.options.meta?.kind === 'text') {
+        const meta = layer.options.meta;
+        const offset = Array.isArray(meta.offsetPx) ? normalizeOffsetPx(meta.offsetPx) : null;
+        feats.push({
+          type:'Feature',
+          geometry:{ type:'Point', coordinates:[p.lng, p.lat] },
+          properties:{
+            kind: 'text',
+            text:  meta.text ?? '',
+            size:  Number.isFinite(+meta.size) ? +meta.size : 12,
+            color: meta.color ?? '#111',
+            bg:    meta.bg ?? '#fff',
+            border:meta.border ?? '#e5e7eb',
+            attachedTo: meta.attachedTo || null,
+            offsetPx: offset
+          }
+        });
+        return;
+      }
+
       let props = { kind:'unknown' };
 
       if (layer.options.icon && typeof layer.options.icon.options.html === 'string') {
         const div = document.createElement('div');
         div.innerHTML = layer.options.icon.options.html;
         const el = div.firstChild;
-        const style = el.getAttribute('style') || '';
+        const style = el?.getAttribute?.('style') || '';
         props = {
           kind:  'text',
-          text:  el.textContent || '',
+          text:  el?.textContent || '',
           size:  +(style.match(/font-size:(\d+)px/)?.[1] || 12),
           color: (style.match(/color:\s*([^;]+)/)?.[1] || '#111'),
           bg:    (style.match(/background:\s*([^;]+)/)?.[1] || '#fff'),
@@ -974,17 +1187,24 @@
       const p = L.latLng(y,x);
 
       if (k === 'text') {
-        const { text='', size=12, color='#111', bg='#fff', border='#e5e7eb' } = f.properties || {};
-        const mk = L.marker(p, { icon: makeTextDivIcon(text,size,color,bg,border), draggable:true }).addTo(overlayLayer);
-        mk.on('click', e => {
-          if(measurementActive){
-            measurementHandlePoint?.(e.latlng);
-            e.originalEvent?.stopPropagation?.();
-            return;
+        const { text='', size=12, color='#111', bg='#fff', border='#e5e7eb', attachedTo=null, offsetPx=null } = f.properties || {};
+        const normalizedOffset = Array.isArray(offsetPx) ? normalizeOffsetPx(offsetPx) : null;
+        const meta = { kind:'text', text, size, color, bg, border };
+        if(attachedTo){
+          meta.attachedTo = attachedTo;
+          if(normalizedOffset) meta.offsetPx = normalizedOffset;
+        }
+        let targetLatLng = p;
+        if(attachedTo && normalizedOffset){
+          const marker = overlayIndex.get(attachedTo);
+          if(marker){
+            const anchoredLatLng = computeAnchoredLatLng(marker, normalizedOffset);
+            if(anchoredLatLng) targetLatLng = anchoredLatLng;
           }
-          selectLayer(mk); e.originalEvent.stopPropagation();
-        });
-        mk.on('dragstart', clearSelection);
+        }
+        const mk = L.marker(targetLatLng, { icon: makeTextDivIcon(text,size,color,bg,border), draggable:true }).addTo(overlayLayer);
+        mk.options.meta = meta;
+        bindTextMarkerEvents(mk);
         return;
       }
       if (k === 'nato') {
@@ -999,6 +1219,12 @@
             return;
           }
           const mode = singlePlacementActive ? singlePlacementMode : null;
+          if(mode === 'text'){
+            const offsetPx = defaultTextAnchorOffset(mk);
+            addTextAt(mk.getLatLng(), { marker: mk, offsetPx });
+            e.originalEvent?.stopPropagation?.();
+            return;
+          }
           if(mode === 'maneuver'){
             handleManeuverClick(mk.getLatLng());
             e.originalEvent?.stopPropagation?.();
