@@ -1207,25 +1207,40 @@
     if(!marker?.getLatLng || !targetLatLng) return Promise.resolve();
     const startLatLng = marker.getLatLng();
     if(!startLatLng) return Promise.resolve();
-    if(startLatLng.lat === targetLatLng.lat && startLatLng.lng === targetLatLng.lng) return Promise.resolve();
+    const start = L.latLng(startLatLng);
+    const end = L.latLng(targetLatLng);
+    if(!Number.isFinite(start.lat) || !Number.isFinite(start.lng) ||
+       !Number.isFinite(end.lat)   || !Number.isFinite(end.lng)){
+      return Promise.resolve();
+    }
+    if(start.lat === end.lat && start.lng === end.lng) return Promise.resolve();
     const existing = activeMarkerAnimations.get(marker);
     if(existing?.cancel) existing.cancel();
     if(typeof requestAnimationFrame !== 'function' || typeof cancelAnimationFrame !== 'function'){
-      marker.setLatLng([targetLatLng.lat, targetLatLng.lng]);
+      marker.setLatLng([end.lat, end.lng]);
       return Promise.resolve();
     }
     return new Promise(resolve => {
-      const start = { lat: startLatLng.lat, lng: startLatLng.lng };
-      const end = { lat: targetLatLng.lat, lng: targetLatLng.lng };
-      const state = { cancel: null, cancelled: false };
+      const state = { cancel: null, cancelled: false, rafId: null };
       const nowFn = (typeof performance !== 'undefined' && performance.now) ? () => performance.now() : () => Date.now();
       const startTime = nowFn();
+      const durationMs = Math.max(0, Number(duration) || 0);
+      const onRemove = () => state.cancel?.();
+      marker.once('remove', onRemove);
+
+      function finish(){
+        if(state.cancelled) return;
+        marker.off('remove', onRemove);
+        activeMarkerAnimations.delete(marker);
+        marker.setLatLng([end.lat, end.lng]);
+        resolve();
+      }
 
       function step(now){
         if(state.cancelled) return;
         const current = typeof now === 'number' ? now : nowFn();
         const elapsed = current - startTime;
-        const linearT = duration > 0 ? Math.min(1, elapsed / duration) : 1;
+        const linearT = durationMs > 0 ? Math.min(1, elapsed / durationMs) : 1;
         const t = easeInOut(linearT);
         const lat = start.lat + (end.lat - start.lat) * t;
         const lng = start.lng + (end.lng - start.lng) * t;
@@ -1233,8 +1248,7 @@
         if(linearT < 1){
           state.rafId = requestAnimationFrame(step);
         } else {
-          activeMarkerAnimations.delete(marker);
-          resolve();
+          finish();
         }
       }
 
@@ -1242,6 +1256,7 @@
         if(state.cancelled) return;
         state.cancelled = true;
         if(state.rafId) cancelAnimationFrame(state.rafId);
+        marker.off('remove', onRemove);
         activeMarkerAnimations.delete(marker);
         resolve();
       };
@@ -1252,6 +1267,7 @@
   }
 
   function executeManeuvers(){
+    resetManeuverDraft();
     const markerTargets = new Map();
     overlayLayer.eachLayer(layer => {
       if(layer?.options?.meta?.kind !== 'maneuver') return;
@@ -1265,10 +1281,10 @@
       let endMarker = layer._maneuverAnchors?.end || null;
       if(!endMarker && meta.endAnchorId) endMarker = overlayIndex.get(meta.endAnchorId) || null;
       if(startMarker && !markerTargets.has(startMarker)){
-        markerTargets.set(startMarker, endLatLng);
+        markerTargets.set(startMarker, L.latLng(endLatLng));
       }
       if(endMarker && !markerTargets.has(endMarker)){
-        markerTargets.set(endMarker, startLatLng);
+        markerTargets.set(endMarker, L.latLng(startLatLng));
       }
     });
     if(!markerTargets.size) return;
@@ -1276,7 +1292,7 @@
     markerTargets.forEach((target, marker) => {
       animations.push(animateMarkerTo(marker, target));
     });
-    Promise.allSettled(animations).then(() => {
+    return Promise.allSettled(animations).then(() => {
       if(typeof saveOverlays === 'function') saveOverlays();
     });
   }
