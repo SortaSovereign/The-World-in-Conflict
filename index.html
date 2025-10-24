@@ -457,8 +457,9 @@
 
   function ensureMarkerAttachmentHandlers(marker){
     if(marker._attachmentHandler) return;
-    marker._attachmentHandler = () => {
-      const latlng = marker.getLatLng();
+    marker._attachmentHandler = e => {
+      const latlng = e?.latlng || marker.getLatLng();
+      if(!latlng) return;
       if(marker === maneuverStartAnchor){
         maneuverStart = latlng;
         if(maneuverGuide){
@@ -485,6 +486,7 @@
       }
     };
     marker.on('drag', marker._attachmentHandler);
+    marker.on('dragend', marker._attachmentHandler);
     marker.on('move', marker._attachmentHandler);
   }
 
@@ -644,6 +646,7 @@
     if(!hasManeuvers) delete marker._attachedManeuvers;
     if(!hasRanges && !hasTexts && !hasManeuvers && marker._attachmentHandler){
       marker.off('drag', marker._attachmentHandler);
+      marker.off('dragend', marker._attachmentHandler);
       marker.off('move', marker._attachmentHandler);
       marker._attachmentHandler = null;
     }
