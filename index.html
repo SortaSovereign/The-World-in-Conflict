@@ -1201,7 +1201,25 @@
       clearSelection();
       return;
     }
-    if (singlePlacementMode === 'text') addTextAt(e.latlng);
+    if (singlePlacementMode === 'text') {
+      let anchorMeta = null;
+      const isNatoMarker = selected?.options?.meta?.kind === 'nato';
+      if (isNatoMarker && typeof selected.getLatLng === 'function') {
+        const markerLatLng = selected.getLatLng();
+        if (markerLatLng && map?.latLngToLayerPoint) {
+          const markerPoint = map.latLngToLayerPoint(markerLatLng);
+          const clickPoint = map.latLngToLayerPoint(e.latlng);
+          if (markerPoint && clickPoint) {
+            const offsetPx = [clickPoint.x - markerPoint.x, clickPoint.y - markerPoint.y];
+            anchorMeta = { marker: selected, offsetPx };
+          }
+        }
+        if (!anchorMeta) {
+          anchorMeta = { marker: selected };
+        }
+      }
+      addTextAt(e.latlng, anchorMeta);
+    }
     else if (singlePlacementMode === 'nato') addNatoAt(e.latlng);
     else if (singlePlacementMode === 'weaponRange') {
       const anchor = (selected && selected.options?.meta?.kind === 'nato') ? selected : null;
