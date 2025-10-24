@@ -89,6 +89,9 @@
         <label>Border</label><input id="txtBorder" type="color" value="#e5e7eb"/>
       </div>
       <div class="twic-muted">Click map to place a text box.</div>
+      <div style="display:flex; justify-content:flex-end; margin-top:6px;">
+        <button class="twic-btn" type="button" id="btnPlaceText">Place Text</button>
+      </div>
     </div>
 
     <!-- Simplified NATO options -->
@@ -112,6 +115,9 @@
         <label>Size</label><input id="natoSize" type="number" value="36" min="16" max="96"/>
       </div>
       <div class="twic-muted">Click map to place a NATO symbol.</div>
+      <div style="display:flex; justify-content:flex-end; margin-top:6px;">
+        <button class="twic-btn" type="button" id="btnPlaceNato">Place NATO Icon</button>
+      </div>
     </div>
 
     <!-- Weapon engagement range options -->
@@ -123,6 +129,9 @@
       </div>
       <div class="twic-row"><label>Fill α</label><input id="weaponOpacity" type="number" value="0.15" min="0" max="1" step="0.05"/></div>
       <div class="twic-muted">Click map to place a range circle in nautical miles.</div>
+      <div style="display:flex; justify-content:flex-end; margin-top:6px;">
+        <button class="twic-btn" type="button" id="btnPlaceRange">Place Range</button>
+      </div>
     </div>
 
     <!-- Maneuver line options -->
@@ -140,6 +149,9 @@
         </select>
       </div>
       <div class="twic-muted">Click start and end points to draw a line of maneuver.</div>
+      <div style="display:flex; justify-content:flex-end; margin-top:6px;">
+        <button class="twic-btn" type="button" id="btnPlaceManeuver">Place Maneuver</button>
+      </div>
     </div>
 
     <!-- Share + overlay actions -->
@@ -179,6 +191,24 @@
   const overlayPane = map.getPanes().overlayPane;
   const markerPane = map.getPanes().markerPane;
   setTimeout(() => mapEl.focus(), 0);
+
+  let toolMode = null;
+  let singlePlacementActive = false;
+  let singlePlacementMode = null;
+  let measurementCancel = null;
+  let measurementHandlePoint = null;
+  let measurementActive = false;
+
+  function updateMapCursor(){
+    const mode = toolMode?.value || 'select';
+    if(measurementActive){
+      mapEl.style.cursor = 'crosshair';
+    } else if(mode !== 'select'){
+      mapEl.style.cursor = 'crosshair';
+    } else {
+      mapEl.style.cursor = '';
+    }
+  }
 
   L.tileLayer(TILE_URL, {
     tileSize: 256,
@@ -222,8 +252,6 @@
   })();
 
   /* ===== Measurement tool ===== */
-  let measurementActive = false;
-  let measurementHandlePoint = null;
 
   function formatNauticalMiles(lengthNm){
     return `${lengthNm.toFixed(2)} ${UNIT_NAME}`;
@@ -347,12 +375,13 @@
     function begin(){
       active=true; start=null; measurementActive = true; syncOverlayInteractivity();
       resetManeuverDraft();
-      mapEl.style.cursor='crosshair'; mapEl.focus();
+      updateMapCursor();
+      mapEl.focus();
     }
     function cancel(){
       active=false; start=null; measurementActive = false; syncOverlayInteractivity();
       if(guide){ map.removeLayer(guide); guide=null; }
-      mapEl.style.cursor='';
+      updateMapCursor();
       measureBtn?.classList.remove('active');
     }
     function clearAll(){ group.clearLayers(); cancel(); }
@@ -360,6 +389,8 @@
     map.on('click', e => { handlePoint(e.latlng); });
     map.on('mousemove', e => { if(active && guide && start) guide.setLatLngs([start, e.latlng]); });
     document.addEventListener('keydown', e => { if(e.key === 'Escape') cancel(); });
+
+    measurementCancel = cancel;
 
     measureBtn.onclick = () => { measureBtn.classList.add('active'); begin(); };
     clearBtn.onclick   = () => { measureBtn.classList.remove('active'); clearAll(); };
@@ -542,17 +573,67 @@
   const maneuverColor = document.getElementById('maneuverColor');
   const maneuverWidth = document.getElementById('maneuverWidth');
   const maneuverDash = document.getElementById('maneuverDash');
+  const btnPlaceText = document.getElementById('btnPlaceText');
+  const btnPlaceNato = document.getElementById('btnPlaceNato');
+  const btnPlaceRange = document.getElementById('btnPlaceRange');
+  const btnPlaceManeuver = document.getElementById('btnPlaceManeuver');
+
+  function beginSinglePlacement(mode){
+    if(!mode) return;
+    measurementCancel?.();
+    singlePlacementActive = true;
+    singlePlacementMode = mode;
+    if(toolMode.value !== mode){
+      toolMode.value = mode;
+    }
+    syncToolPanels();
+    updateMapCursor();
+    mapEl.focus();
+  }
+
+  function finishSinglePlacement(){
+    singlePlacementActive = false;
+    singlePlacementMode = null;
+    if(toolMode.value !== 'select'){
+      toolMode.value = 'select';
+    }
+    syncToolPanels();
+    updateMapCursor();
+  }
+
+  function maybeCompleteSinglePlacement(mode){
+    if(!singlePlacementActive) return;
+    if(singlePlacementMode && singlePlacementMode !== mode) return;
+    finishSinglePlacement();
+  }
+
+  function cancelSinglePlacement(){
+    if(!singlePlacementActive) return;
+    finishSinglePlacement();
+  }
+
+  btnPlaceText?.addEventListener('click', () => beginSinglePlacement('text'));
+  btnPlaceNato?.addEventListener('click', () => beginSinglePlacement('nato'));
+  btnPlaceRange?.addEventListener('click', () => beginSinglePlacement('weaponRange'));
+  btnPlaceManeuver?.addEventListener('click', () => beginSinglePlacement('maneuver'));
 
   function syncToolPanels(){
-    textOpts.style.display = (toolMode.value === 'text') ? '' : 'none';
-    natoOpts.style.display = (toolMode.value === 'nato') ? '' : 'none';
-    weaponOpts.style.display = (toolMode.value === 'weaponRange') ? '' : 'none';
-    maneuverOpts.style.display = (toolMode.value === 'maneuver') ? '' : 'none';
-    const maneuverActive = (toolMode.value === 'maneuver');
+    const mode = toolMode.value;
+    textOpts.style.display = (mode === 'text') ? '' : 'none';
+    natoOpts.style.display = (mode === 'nato') ? '' : 'none';
+    weaponOpts.style.display = (mode === 'weaponRange') ? '' : 'none';
+    maneuverOpts.style.display = (mode === 'maneuver') ? '' : 'none';
+    const maneuverActive = (mode === 'maneuver');
     setOverlayPointerPassthrough('maneuver', maneuverActive);
+    setOverlayPointerPassthrough('toolMode', mode !== 'select');
     if(!maneuverActive) resetManeuverDraft();
+    updateMapCursor();
   }
-  toolMode.addEventListener('change', syncToolPanels);
+  toolMode.addEventListener('change', () => {
+    singlePlacementActive = false;
+    singlePlacementMode = null;
+    syncToolPanels();
+  });
   syncToolPanels();
 
   /* Text boxes */
@@ -576,6 +657,7 @@
       selectLayer(m); e.originalEvent.stopPropagation();
     });
     m.on('dragstart', clearSelection);
+    maybeCompleteSinglePlacement('text');
   }
 
   /* NATO symbol mapping (Air/Surface/Ground/Subsurface × Friendly/Hostile/Neutral) */
@@ -644,6 +726,7 @@
       selectLayer(m); e.originalEvent.stopPropagation();
     });
     m.on('dragstart', clearSelection);
+    maybeCompleteSinglePlacement('nato');
   }
 
   function dashPatternFromValue(val){
@@ -673,6 +756,7 @@
     circle.addTo(overlayLayer);
     attachSelectablePath(circle);
     if(anchorMarker) attachRangeToMarker(circle, anchorMarker);
+    maybeCompleteSinglePlacement('weaponRange');
   }
   function handleManeuverClick(p){
     const color = maneuverColor.value || '#2563eb';
@@ -695,6 +779,7 @@
       attachSelectablePath(poly);
       attachManeuverLengthLabel(poly);
       resetManeuverDraft();
+      maybeCompleteSinglePlacement('maneuver');
     }
   }
   map.on('mousemove', e => {
@@ -710,7 +795,9 @@
     }
   });
   document.addEventListener('keydown', e => {
-    if(e.key === 'Escape' && toolMode.value === 'maneuver') resetManeuverDraft();
+    if(e.key !== 'Escape') return;
+    if(toolMode.value === 'maneuver') resetManeuverDraft();
+    cancelSinglePlacement();
   });
 
   map.on('click', e => {
