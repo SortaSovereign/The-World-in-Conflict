@@ -268,7 +268,18 @@
   function attachManeuverLengthLabel(polyline){
     if(!polyline || typeof polyline.getLatLngs !== 'function') return;
     const latlngs = polyline.getLatLngs();
-    if(!Array.isArray(latlngs) || latlngs.length < 2) return;
+
+    if(!Array.isArray(latlngs) || latlngs.length < 2){
+      if(polyline._lengthTooltip){
+        polyline.unbindTooltip();
+        polyline._lengthTooltip = null;
+      }
+      if(polyline._lengthTooltipRemoveHandler){
+        polyline.off('remove', polyline._lengthTooltipRemoveHandler);
+        polyline._lengthTooltipRemoveHandler = null;
+      }
+      return;
+    }
 
     if(polyline._lengthTooltipRemoveHandler){
       polyline.off('remove', polyline._lengthTooltipRemoveHandler);
@@ -309,6 +320,79 @@
 
     polyline._lengthTooltipRemoveHandler = removeHandler;
     polyline.on('remove', removeHandler);
+  }
+  function removeManeuverHandle(polyline){
+    if(!polyline) return;
+    const handle = polyline._selectionHandle;
+    if(handle){
+      handle.off?.('click');
+      if(map?.hasLayer?.(handle)) map.removeLayer(handle);
+      polyline._selectionHandle = null;
+    }
+    if(polyline._selectionHandleRemoveHandler){
+      polyline.off('remove', polyline._selectionHandleRemoveHandler);
+      polyline._selectionHandleRemoveHandler = null;
+    }
+  }
+  function syncManeuverHandle(polyline){
+    if(!polyline || typeof polyline.getLatLngs !== 'function') return;
+    const latlngs = polyline.getLatLngs();
+    if(!Array.isArray(latlngs) || latlngs.length < 2){
+      removeManeuverHandle(polyline);
+      return;
+    }
+    const start = latlngs[0];
+    const end = latlngs[latlngs.length - 1];
+    const midpoint = midpointLatLng(start, end);
+    if(!midpoint){
+      removeManeuverHandle(polyline);
+      return;
+    }
+
+    if(!polyline._selectionHandle){
+      const handle = L.circleMarker(midpoint, {
+        radius: 6,
+        weight: 2,
+        color: '#111827',
+        fillColor: '#fff',
+        fillOpacity: 1,
+        interactive: true,
+        bubblingMouseEvents: false
+      }).addTo(map);
+      handle.on('click', e => {
+        selectLayer(polyline);
+        stopLeafletEvent(e);
+      });
+      polyline._selectionHandle = handle;
+      if(!polyline._selectionHandleRemoveHandler){
+        polyline._selectionHandleRemoveHandler = () => removeManeuverHandle(polyline);
+        polyline.on('remove', polyline._selectionHandleRemoveHandler);
+      }
+    } else {
+      polyline._selectionHandle.setLatLng(midpoint);
+    }
+  }
+  function updateManeuverPolylineArtifacts(polyline){
+    attachManeuverLengthLabel(polyline);
+    syncManeuverHandle(polyline);
+  }
+  function ensureManeuverLatLngSync(polyline){
+    if(!polyline || polyline._maneuverLatLngSync) return;
+    polyline._maneuverLatLngSync = true;
+    ['setLatLngs','addLatLng','spliceLatLngs'].forEach(methodName => {
+      const original = polyline[methodName];
+      if(typeof original !== 'function') return;
+      polyline[methodName] = function(...args){
+        const result = original.apply(this, args);
+        updateManeuverPolylineArtifacts(this);
+        return result;
+      };
+    });
+  }
+  function decorateManeuverPolyline(polyline){
+    if(!polyline) return;
+    ensureManeuverLatLngSync(polyline);
+    updateManeuverPolylineArtifacts(polyline);
   }
   (function addMeasureTool(){
     let active=false, start=null, guide=null;
@@ -612,6 +696,8 @@
       detachRange(layer);
     } else if(kind === 'text'){
       detachText(layer);
+    } else if(kind === 'maneuver'){
+      removeManeuverHandle(layer);
     }
   });
 
@@ -1012,7 +1098,7 @@
       const poly = L.polyline(latlngs, { color, weight, dashArray }).addTo(overlayLayer);
       poly.options.meta = { kind:'maneuver', color, weight, dashArray };
       attachSelectablePath(poly);
-      attachManeuverLengthLabel(poly);
+      decorateManeuverPolyline(poly);
       resetManeuverDraft();
       maybeCompleteSinglePlacement('maneuver');
     }
@@ -1175,7 +1261,7 @@
         const poly = L.polyline(latlngs, { color, weight, dashArray }).addTo(overlayLayer);
         poly.options.meta = { kind:'maneuver', color, weight, dashArray };
         attachSelectablePath(poly);
-        attachManeuverLengthLabel(poly);
+        decorateManeuverPolyline(poly);
         return;
       }
 
