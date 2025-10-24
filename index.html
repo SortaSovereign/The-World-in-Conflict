@@ -43,6 +43,8 @@
     .twic-row input, .twic-row select {
       flex:1; padding:6px 8px; border:1px solid #e5e7eb; border-radius:8px;
     }
+    .twic-tabs { align-items:stretch; }
+    .twic-tab { flex:1; font-weight:600; text-align:center; }
     .twic-muted { color:#6b7280; font-size:11px; margin-top:4px }
     .twic-text {
       background:#fff; border:1px solid #e5e7eb; border-radius:6px; padding:3px 6px;
@@ -66,15 +68,11 @@
   <div class="twic-panel">
     <h3>Overlay Tools</h3>
 
-    <div class="twic-row">
-      <label>Mode</label>
-      <select id="toolMode">
-        <option value="select">Select / Move</option>
-        <option value="text">Add Text</option>
-        <option value="nato">Add NATO Icon</option>
-        <option value="weaponRange">Weapon Range</option>
-        <option value="maneuver">Line of Maneuver</option>
-      </select>
+    <div class="twic-row twic-tabs">
+      <button class="twic-btn twic-tab" type="button" data-panel="text">Text</button>
+      <button class="twic-btn twic-tab" type="button" data-panel="nato">NATO</button>
+      <button class="twic-btn twic-tab" type="button" data-panel="weaponRange">Range</button>
+      <button class="twic-btn twic-tab" type="button" data-panel="maneuver">Maneuver</button>
     </div>
 
     <!-- Text box options -->
@@ -192,7 +190,6 @@
   const markerPane = map.getPanes().markerPane;
   setTimeout(() => mapEl.focus(), 0);
 
-  let toolMode = null;
   let singlePlacementActive = false;
   let singlePlacementMode = null;
   let measurementCancel = null;
@@ -200,10 +197,7 @@
   let measurementActive = false;
 
   function updateMapCursor(){
-    const mode = toolMode?.value || 'select';
-    if(measurementActive){
-      mapEl.style.cursor = 'crosshair';
-    } else if(mode !== 'select'){
+    if(measurementActive || singlePlacementActive){
       mapEl.style.cursor = 'crosshair';
     } else {
       mapEl.style.cursor = '';
@@ -560,7 +554,8 @@
     if(maneuverGuideTooltip){ map.removeLayer(maneuverGuideTooltip); maneuverGuideTooltip=null; }
   }
 
-  toolMode = document.getElementById('toolMode');
+  const toolTabs = Array.from(document.querySelectorAll('.twic-tab'));
+  let activePanel = toolTabs[0]?.dataset?.panel || 'text';
   const textOpts = document.getElementById('textOpts');
   const natoOpts = document.getElementById('natoOpts');
   const weaponOpts = document.getElementById('weaponOpts');
@@ -581,11 +576,9 @@
   function beginSinglePlacement(mode){
     if(!mode) return;
     measurementCancel?.();
+    setActivePanel(mode);
     singlePlacementActive = true;
     singlePlacementMode = mode;
-    if(toolMode.value !== mode){
-      toolMode.value = mode;
-    }
     syncToolPanels();
     updateMapCursor();
     mapEl.focus();
@@ -594,9 +587,6 @@
   function finishSinglePlacement(){
     singlePlacementActive = false;
     singlePlacementMode = null;
-    if(toolMode.value !== 'select'){
-      toolMode.value = 'select';
-    }
     syncToolPanels();
     updateMapCursor();
   }
@@ -618,22 +608,34 @@
   btnPlaceManeuver?.addEventListener('click', () => beginSinglePlacement('maneuver'));
 
   function syncToolPanels(){
-    const mode = toolMode.value;
-    textOpts.style.display = (mode === 'text') ? '' : 'none';
-    natoOpts.style.display = (mode === 'nato') ? '' : 'none';
-    weaponOpts.style.display = (mode === 'weaponRange') ? '' : 'none';
-    maneuverOpts.style.display = (mode === 'maneuver') ? '' : 'none';
-    const maneuverActive = (mode === 'maneuver');
+    toolTabs.forEach(btn => btn.classList.toggle('active', btn.dataset.panel === activePanel));
+    textOpts.style.display = (activePanel === 'text') ? '' : 'none';
+    natoOpts.style.display = (activePanel === 'nato') ? '' : 'none';
+    weaponOpts.style.display = (activePanel === 'weaponRange') ? '' : 'none';
+    maneuverOpts.style.display = (activePanel === 'maneuver') ? '' : 'none';
+    const maneuverActive = (singlePlacementActive && singlePlacementMode === 'maneuver');
+    const placementActive = singlePlacementActive && !maneuverActive;
     setOverlayPointerPassthrough('maneuver', maneuverActive);
-    setOverlayPointerPassthrough('toolMode', mode !== 'select');
+    setOverlayPointerPassthrough('placement', placementActive);
     if(!maneuverActive) resetManeuverDraft();
     updateMapCursor();
   }
-  toolMode.addEventListener('change', () => {
-    singlePlacementActive = false;
-    singlePlacementMode = null;
+
+  function setActivePanel(panel){
+    if(!panel) return;
+    activePanel = panel;
     syncToolPanels();
+  }
+
+  toolTabs.forEach(btn => {
+    btn.addEventListener('click', () => {
+      if(btn.dataset?.panel){
+        cancelSinglePlacement();
+        setActivePanel(btn.dataset.panel);
+      }
+    });
   });
+
   syncToolPanels();
 
   /* Text boxes */
@@ -716,7 +718,7 @@
         e.originalEvent?.stopPropagation?.();
         return;
       }
-      const mode = toolMode?.value;
+      const mode = singlePlacementActive ? singlePlacementMode : null;
       if(mode === 'maneuver'){
         handleManeuverClick(m.getLatLng());
         e.originalEvent?.stopPropagation?.();
@@ -796,17 +798,20 @@
   });
   document.addEventListener('keydown', e => {
     if(e.key !== 'Escape') return;
-    if(toolMode.value === 'maneuver') resetManeuverDraft();
+    if(singlePlacementMode === 'maneuver') resetManeuverDraft();
     cancelSinglePlacement();
   });
 
   map.on('click', e => {
     if (measurementActive) return;
-    if (toolMode.value === 'text') addTextAt(e.latlng);
-    else if (toolMode.value === 'nato') addNatoAt(e.latlng);
-    else if (toolMode.value === 'weaponRange') addWeaponRangeAt(e.latlng);
-    else if (toolMode.value === 'maneuver') handleManeuverClick(e.latlng);
-    else clearSelection();
+    if(!singlePlacementActive){
+      clearSelection();
+      return;
+    }
+    if (singlePlacementMode === 'text') addTextAt(e.latlng);
+    else if (singlePlacementMode === 'nato') addNatoAt(e.latlng);
+    else if (singlePlacementMode === 'weaponRange') addWeaponRangeAt(e.latlng);
+    else if (singlePlacementMode === 'maneuver') handleManeuverClick(e.latlng);
   });
 
   document.getElementById('btnDelete').onclick = () => { if (selected) { overlayLayer.removeLayer(selected); selected=null; } };
@@ -965,7 +970,7 @@
             e.originalEvent?.stopPropagation?.();
             return;
           }
-          const mode = toolMode?.value;
+          const mode = singlePlacementActive ? singlePlacementMode : null;
           if(mode === 'maneuver'){
             handleManeuverClick(mk.getLatLng());
             e.originalEvent?.stopPropagation?.();
@@ -1084,7 +1089,11 @@ function hookOverlaySaves() {
 
 
   overlayLayer.eachLayer(l => { if (l.dragging) l.on('dragend', saveOverlays); });
-  overlayLayer.on('layeradd', l => { if (l.layer?.dragging) l.layer.on('dragend', saveOverlays); });
+  overlayLayer.on('layeradd', e => {
+    const layer = e.layer;
+    if (layer?.dragging) layer.on('dragend', saveOverlays);
+  });
+}
 
 function debounce(fn, wait=300){
   let t; return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args), wait); };
