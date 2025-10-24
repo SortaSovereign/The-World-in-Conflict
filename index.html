@@ -1095,8 +1095,9 @@
       const anchoredLatLng = computeAnchoredLatLng(anchorMarker, offsetPx);
       if(anchoredLatLng) targetLatLng = anchoredLatLng;
     }
-    const marker = L.marker(targetLatLng, { icon: makeTextDivIcon(t,s,c,bg,b), draggable:true }).addTo(overlayLayer);
+    const marker = L.marker(targetLatLng, { icon: makeTextDivIcon(t,s,c,bg,b), draggable:true });
     marker.options.meta = meta;
+    marker.addTo(overlayLayer);
     bindTextMarkerEvents(marker);
     maybeCompleteSinglePlacement('text');
     return marker;
@@ -1607,8 +1608,9 @@
             if(anchoredLatLng) targetLatLng = anchoredLatLng;
           }
         }
-        const mk = L.marker(targetLatLng, { icon: makeTextDivIcon(text,size,color,bg,border), draggable:true }).addTo(overlayLayer);
+        const mk = L.marker(targetLatLng, { icon: makeTextDivIcon(text,size,color,bg,border), draggable:true });
         mk.options.meta = meta;
+        mk.addTo(overlayLayer);
         bindTextMarkerEvents(mk);
         return;
       }
