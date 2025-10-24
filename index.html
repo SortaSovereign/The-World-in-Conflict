@@ -324,60 +324,8 @@
     polyline._lengthTooltipRemoveHandler = removeHandler;
     polyline.on('remove', removeHandler);
   }
-  function removeManeuverHandle(polyline){
-    if(!polyline) return;
-    const handle = polyline._selectionHandle;
-    if(handle){
-      handle.off?.('click');
-      if(map?.hasLayer?.(handle)) map.removeLayer(handle);
-      polyline._selectionHandle = null;
-    }
-    if(polyline._selectionHandleRemoveHandler){
-      polyline.off('remove', polyline._selectionHandleRemoveHandler);
-      polyline._selectionHandleRemoveHandler = null;
-    }
-  }
-  function syncManeuverHandle(polyline){
-    if(!polyline || typeof polyline.getLatLngs !== 'function') return;
-    const latlngs = polyline.getLatLngs();
-    if(!Array.isArray(latlngs) || latlngs.length < 2){
-      removeManeuverHandle(polyline);
-      return;
-    }
-    const start = latlngs[0];
-    const end = latlngs[latlngs.length - 1];
-    const midpoint = midpointLatLng(start, end);
-    if(!midpoint){
-      removeManeuverHandle(polyline);
-      return;
-    }
-
-    if(!polyline._selectionHandle){
-      const handle = L.circleMarker(midpoint, {
-        radius: 6,
-        weight: 2,
-        color: '#111827',
-        fillColor: '#fff',
-        fillOpacity: 1,
-        interactive: true,
-        bubblingMouseEvents: false
-      }).addTo(map);
-      handle.on('click', e => {
-        selectLayer(polyline);
-        stopLeafletEvent(e);
-      });
-      polyline._selectionHandle = handle;
-      if(!polyline._selectionHandleRemoveHandler){
-        polyline._selectionHandleRemoveHandler = () => removeManeuverHandle(polyline);
-        polyline.on('remove', polyline._selectionHandleRemoveHandler);
-      }
-    } else {
-      polyline._selectionHandle.setLatLng(midpoint);
-    }
-  }
   function updateManeuverPolylineArtifacts(polyline){
     attachManeuverLengthLabel(polyline);
-    syncManeuverHandle(polyline);
   }
   function refreshManeuverLengthLabel(polyline){
     if(!polyline) return;
@@ -495,7 +443,6 @@
   const pendingTextAttachments = new Map();
   const pendingManeuverAttachments = new Map();
   const anchoredTextLayers = new Set();
-  const weaponRangeLayers = new Set();
   const activeMarkerAnimations = new Map();
 
   function generateOverlayId(kind='overlay'){
@@ -536,69 +483,6 @@
     marker.on('move', marker._attachmentHandler);
   }
 
-  function ensureRangeHandle(range){
-    if(!range) return null;
-    if(range._selectionHandle){
-      weaponRangeLayers.add(range);
-      updateRangeHandlePosition(range);
-      return range._selectionHandle;
-    }
-    const handle = L.circleMarker(range.getLatLng(), {
-      radius: 4,
-      color: '#111827',
-      weight: 1,
-      fillColor: '#ffffff',
-      fillOpacity: 1,
-      interactive: true
-    });
-    handle._parentRange = range;
-    range._selectionHandle = handle;
-    weaponRangeLayers.add(range);
-    handle.addTo(overlayLayer);
-    handle.on('click', e => {
-      selectLayer(range);
-      stopLeafletEvent(e);
-    });
-    handle.on('mousedown', stopLeafletEvent);
-    handle.on('touchstart', stopLeafletEvent);
-    updateRangeHandlePosition(range);
-    return handle;
-  }
-
-  function updateRangeHandlePosition(range){
-    if(!range?._selectionHandle) return;
-    const center = range.getLatLng?.();
-    if(!center) return;
-    let target = null;
-    if(map?.latLngToLayerPoint && map?.layerPointToLatLng){
-      const centerPoint = map.latLngToLayerPoint(center);
-      const radiusPx = Number.isFinite(range._radius) ? range._radius : null;
-      if(radiusPx !== null){
-        const handlePoint = centerPoint.add(L.point(radiusPx, 0));
-        target = map.layerPointToLatLng(handlePoint);
-      }
-    }
-    if(!target){
-      const radius = range.getRadius?.();
-      if(Number.isFinite(radius)) target = L.latLng(center.lat, center.lng + radius);
-    }
-    if(!target) target = center;
-    range._selectionHandle.setLatLng(target);
-  }
-
-  function destroyRangeHandle(range){
-    if(!range) return;
-    weaponRangeLayers.delete(range);
-    const handle = range._selectionHandle;
-    if(!handle) return;
-    range._selectionHandle = null;
-    handle._parentRange = null;
-    if(overlayLayer.hasLayer(handle)) overlayLayer.removeLayer(handle);
-    handle.off('click');
-    handle.off('mousedown');
-    handle.off('touchstart');
-  }
-
   function attachRangeToMarker(range, marker){
     if(!marker) return;
     const markerId = marker.options?.meta?.id;
@@ -608,8 +492,6 @@
     range._attachedTo = marker;
     range.options.meta.attachedTo = markerId;
     range.setLatLng(marker.getLatLng());
-    ensureRangeHandle(range);
-    updateRangeHandlePosition(range);
     ensureMarkerAttachmentHandlers(marker);
   }
 
@@ -800,7 +682,6 @@
     }
     range._attachedTo = null;
     if(range.options?.meta) range.options.meta.attachedTo = null;
-    destroyRangeHandle(range);
     maybeCleanupMarkerAttachments(marker);
   }
 
@@ -852,8 +733,6 @@
     if(kind === 'nato'){
       registerMarker(layer);
     } else if(kind === 'weaponRange'){
-      ensureRangeHandle(layer);
-      updateRangeHandlePosition(layer);
       const anchorId = layer.options.meta.attachedTo;
       if(anchorId){
         const marker = overlayIndex.get(anchorId);
@@ -907,7 +786,6 @@
       const target = computeAnchoredLatLng(marker, offsetPx);
       if(target) textLayer.setLatLng(target);
     });
-    weaponRangeLayers.forEach(range => updateRangeHandlePosition(range));
   });
 
   function capturePathStyle(layer){
@@ -1299,7 +1177,6 @@
     circle.options.meta = { kind:'weaponRange', radiusNm, color: stroke, fillColor: fill, fillOpacity, attachedTo };
     circle.addTo(overlayLayer);
     attachSelectablePath(circle);
-    ensureRangeHandle(circle);
     maybeCompleteSinglePlacement('weaponRange');
     return circle;
   }
@@ -1660,7 +1537,6 @@
         circle.options.meta = { kind:'weaponRange', radiusNm, color, fillColor, fillOpacity: normalizedFill, attachedTo };
         circle.addTo(overlayLayer);
         attachSelectablePath(circle);
-        ensureRangeHandle(circle);
         return;
       }
 
