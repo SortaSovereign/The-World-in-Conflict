@@ -112,8 +112,12 @@
         </select>
         <label>Size</label><input id="natoSize" type="number" value="36" min="16" max="96"/>
       </div>
+      <div class="twic-row">
+        <label>Label</label><input id="natoLabelText" type="text" placeholder="Label…"/>
+      </div>
       <div class="twic-muted">Click map to place a NATO symbol.</div>
-      <div style="display:flex; justify-content:flex-end; margin-top:6px;">
+      <div style="display:flex; justify-content:flex-end; gap:6px; margin-top:6px; flex-wrap:wrap;">
+        <button class="twic-btn" type="button" id="btnNatoLabel">Add Label</button>
         <button class="twic-btn" type="button" id="btnPlaceNato">Place NATO Icon</button>
       </div>
     </div>
@@ -195,6 +199,7 @@
 
   let singlePlacementActive = false;
   let singlePlacementMode = null;
+  let pendingNatoLabelText = null;
   let measurementCancel = null;
   let measurementHandlePoint = null;
   let measurementActive = false;
@@ -888,8 +893,10 @@
   const maneuverColor = document.getElementById('maneuverColor');
   const maneuverWidth = document.getElementById('maneuverWidth');
   const maneuverDash = document.getElementById('maneuverDash');
+  const natoLabelInput = document.getElementById('natoLabelText');
   const btnPlaceText = document.getElementById('btnPlaceText');
   const btnPlaceNato = document.getElementById('btnPlaceNato');
+  const btnNatoLabel = document.getElementById('btnNatoLabel');
   const btnPlaceRange = document.getElementById('btnPlaceRange');
   const btnClearRanges = document.getElementById('btnClearRanges');
   const btnExecuteManeuver = document.getElementById('btnExecuteManeuver');
@@ -908,8 +915,10 @@
   }
 
   function finishSinglePlacement(){
+    const previousMode = singlePlacementMode;
     singlePlacementActive = false;
     singlePlacementMode = null;
+    if(previousMode === 'nato') pendingNatoLabelText = null;
     syncToolPanels();
     updateMapCursor();
   }
@@ -925,8 +934,35 @@
     finishSinglePlacement();
   }
 
+  function getSelectedNatoMarker(){
+    if(selected?.options?.meta?.kind === 'nato') return selected;
+    return null;
+  }
+
+  function addLabelForNatoMarker(marker, text){
+    const trimmed = (text || '').trim();
+    if(!marker || !trimmed) return null;
+    const offsetPx = defaultTextAnchorOffset(marker);
+    return addTextAt(marker.getLatLng(), { marker, offsetPx }, { text: trimmed });
+  }
+
+  function handleNatoLabelRequest(){
+    const labelText = (natoLabelInput?.value || '').trim();
+    if(!labelText) return;
+    const marker = getSelectedNatoMarker();
+    if(marker){
+      addLabelForNatoMarker(marker, labelText);
+      pendingNatoLabelText = null;
+      return;
+    }
+    if(singlePlacementActive && singlePlacementMode === 'nato'){
+      pendingNatoLabelText = labelText;
+    }
+  }
+
   btnPlaceText?.addEventListener('click', () => beginSinglePlacement('text'));
   btnPlaceNato?.addEventListener('click', () => beginSinglePlacement('nato'));
+  btnNatoLabel?.addEventListener('click', handleNatoLabelRequest);
   btnPlaceRange?.addEventListener('click', () => beginSinglePlacement('weaponRange'));
   btnClearRanges?.addEventListener('click', () => clearOverlaysByKind('weaponRange'));
   btnExecuteManeuver?.addEventListener('click', executeManeuvers);
@@ -1033,12 +1069,19 @@
     }
   }
 
-  function addTextAt(p, anchorMeta=null){
-    const t = txtText.value || 'Label';
-    const s = +txtSize.value || 12;
-    const c = txtColor.value;
-    const bg= txtBg.value;
-    const b = txtBorder.value;
+  function addTextAt(p, anchorMeta=null, overrides=null){
+    const opts = overrides || {};
+    const baseTextValue = (opts.text !== undefined) ? opts.text : (window.txtText?.value ?? '');
+    const baseSizeValue = (opts.size !== undefined) ? opts.size : (window.txtSize?.value ?? 12);
+    const baseColorValue = (opts.color !== undefined) ? opts.color : (window.txtColor?.value ?? '#111111');
+    const baseBgValue = (opts.bg !== undefined) ? opts.bg : (window.txtBg?.value ?? '#ffffff');
+    const baseBorderValue = (opts.border !== undefined) ? opts.border : (window.txtBorder?.value ?? '#e5e7eb');
+    const t = (baseTextValue || 'Label');
+    const parsedSize = Number(baseSizeValue);
+    const s = (Number.isFinite(parsedSize) && parsedSize > 0) ? parsedSize : 12;
+    const c = baseColorValue || '#111111';
+    const bg = baseBgValue || '#ffffff';
+    const b = baseBorderValue || '#e5e7eb';
     const meta = { kind:'text', text:t, size:s, color:c, bg, border:b };
     let targetLatLng = p;
     let anchorMarker = resolveAnchorMarker(anchorMeta);
@@ -1135,6 +1178,10 @@
       selectLayer(m); e.originalEvent.stopPropagation();
     });
     m.on('dragstart', clearSelection);
+    if(pendingNatoLabelText){
+      addLabelForNatoMarker(m, pendingNatoLabelText);
+      pendingNatoLabelText = null;
+    }
     maybeCompleteSinglePlacement('nato');
   }
 
