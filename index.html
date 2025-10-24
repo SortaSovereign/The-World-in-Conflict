@@ -220,8 +220,11 @@
   function updateOverlayPointerPassthrough(){
     const hasLocks = overlayPointerLocks.size > 0;
     const maneuverOnly = (overlayPointerLocks.size === 1 && overlayPointerLocks.has('maneuver'));
+    const placementLock = overlayPointerLocks.has('placement');
+    const weaponRangePlacement = placementLock && singlePlacementMode === 'weaponRange';
     const overlayValue = hasLocks ? 'none' : '';
-    const markerValue = (hasLocks && !maneuverOnly) ? 'none' : '';
+    const markerLocked = hasLocks && !maneuverOnly && !weaponRangePlacement;
+    const markerValue = markerLocked ? 'none' : '';
     if(overlayPane) overlayPane.style.pointerEvents = overlayValue;
     if(markerPane) markerPane.style.pointerEvents = markerValue;
   }
@@ -728,7 +731,11 @@
         e.originalEvent?.stopPropagation?.();
         return;
       }
-      if(mode === 'weaponRange') return;
+      if(mode === 'weaponRange'){
+        dropWeaponRangeForMarker(m);
+        e.originalEvent?.stopPropagation?.();
+        return;
+      }
       selectLayer(m); e.originalEvent.stopPropagation();
     });
     m.on('dragstart', clearSelection);
@@ -742,13 +749,26 @@
       default: return '';
     }
   }
-  function addWeaponRangeAt(p){
+  function dropWeaponRangeForMarker(marker){
+    if(!marker) return null;
+    const latlng = marker.getLatLng?.();
+    if(!latlng) return null;
+    const circle = addWeaponRangeAt(latlng, marker);
+    if(circle) attachRangeToMarker(circle, marker);
+    return circle;
+  }
+  function addWeaponRangeAt(p, marker=null){
     const radiusNm = Math.max(0, +weaponRadius.value || 0);
     if(!radiusNm) return;
     const stroke = weaponStroke.value || '#ef4444';
     const fill = weaponFill.value || stroke;
     const fillOpacity = Math.min(1, Math.max(0, parseFloat(weaponOpacity.value) || 0));
-    const anchorMarker = (selected && selected.options?.meta?.kind === 'nato') ? selected : null;
+    const anchorMarker = marker ?? ((selected && selected.options?.meta?.kind === 'nato') ? selected : null);
+    if(anchorMarker){
+      const meta = anchorMarker.options.meta || (anchorMarker.options.meta = { kind:'nato' });
+      if(!meta.kind) meta.kind = 'nato';
+      if(!meta.id) meta.id = generateOverlayId('nato');
+    }
     const center = anchorMarker ? anchorMarker.getLatLng() : p;
     const circle = L.circle(center, {
       radius: radiusNm / UNITS_PER_PIXEL,
@@ -761,8 +781,8 @@
     circle.options.meta = { kind:'weaponRange', radiusNm, color: stroke, fillColor: fill, fillOpacity, attachedTo };
     circle.addTo(overlayLayer);
     attachSelectablePath(circle);
-    if(anchorMarker) attachRangeToMarker(circle, anchorMarker);
     maybeCompleteSinglePlacement('weaponRange');
+    return circle;
   }
   function handleManeuverClick(p){
     const color = maneuverColor.value || '#2563eb';
@@ -814,7 +834,11 @@
     }
     if (singlePlacementMode === 'text') addTextAt(e.latlng);
     else if (singlePlacementMode === 'nato') addNatoAt(e.latlng);
-    else if (singlePlacementMode === 'weaponRange') addWeaponRangeAt(e.latlng);
+    else if (singlePlacementMode === 'weaponRange') {
+      const anchor = (selected && selected.options?.meta?.kind === 'nato') ? selected : null;
+      if(anchor) dropWeaponRangeForMarker(anchor);
+      else addWeaponRangeAt(e.latlng);
+    }
     else if (singlePlacementMode === 'maneuver') handleManeuverClick(e.latlng);
   });
 
@@ -980,7 +1004,11 @@
             e.originalEvent?.stopPropagation?.();
             return;
           }
-          if(mode === 'weaponRange') return;
+          if(mode === 'weaponRange'){
+            dropWeaponRangeForMarker(mk);
+            e.originalEvent?.stopPropagation?.();
+            return;
+          }
           selectLayer(mk); e.originalEvent.stopPropagation();
         });
         mk.on('dragstart', clearSelection);
